@@ -1,16 +1,19 @@
-import logging
-import asyncio
-from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional
-from dataclasses import dataclass, asdict
-import json
 import os
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple
+import asyncio
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
+    Application, CommandHandler, CallbackQueryHandler, 
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, scoped_session
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 # Настройка логирования
 logging.basicConfig(
@@ -19,576 +22,565 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Конфигурация базы данных
+DATABASE_URL = "sqlite:///clients.db"
+Base = declarative_base()
+
+# Модель клиента
+class Client(Base):
+    __tablename__ = 'clients'
+    
+    id = Column(Integer, primary_key=True)
+    username = Column(String(100), nullable=False)
+    track_number = Column(String(100), nullable=False)
+    days = Column(Integer, nullable=False)
+    order_amount = Column(Float, nullable=False)
+    product_count = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+    reminded = Column(Boolean, default=False)
+    
+    # Статусы оплат
+    duty_paid = Column(Boolean, default=False)
+    delivery_paid = Column(Boolean, default=False)
+    insurance_paid = Column(Boolean, default=False)
+    deposit_paid = Column(Boolean, default=False)
+    
+    def get_payment_amounts(self) -> Dict[str, float]:
+        """Рассчитать суммы всех платежей"""
+        return calculate_payments(self.order_amount)
+
+# Создание базы данных
+engine = create_engine(DATABASE_URL)
+Base.metadata.create_all(engine)
+Session = scoped_session(sessionmaker(bind=engine))
+
 # Состояния для ConversationHandler
-TAG, DELIVERY_DATE, ORDER_AMOUNT, SPLIT_PAYMENT = range(4)
+USERNAME, TRACK_NUMBER, DAYS, ORDER_AMOUNT, PRODUCT_COUNT = range(5)
 
-# Структура для хранения данных покупателя
-@dataclass
-class Customer:
-    tag: str
-    delivery_date: date
-    order_amount: Optional[float] = None
-    split_payment: Optional[bool] = None
-    notified: bool = False
+# Главное меню
+MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [["Добавить клиента", "Список клиентов"], ["Выдача оплат"]],
+    resize_keyboard=True
+)
 
-class DeliveryBot:
-    def __init__(self, token: str):
-        self.token = token
-        self.customers: Dict[str, Customer] = {}
-        self.load_data()
+# Функции расчета платежей
+def calculate_duty(amount: float) -> float:
+    """Расчет пошлины"""
+    if 5000 <= amount < 6000:
+        return 2382
+    elif 6000 <= amount < 7000:
+        return 2473
+    elif 7000 <= amount < 8000:
+        return 2789
+    elif 9000 <= amount < 10000:
+        return 3474
+    elif 10000 <= amount < 11000:
+        return 3782
+    elif 11000 <= amount < 13500:
+        return 3986
+    elif 13500 <= amount < 15000:
+        return 4387
+    elif 15000 <= amount < 20000:
+        return 5781  # Среднее значение из диапазона
+    elif amount >= 20000:
+        return 8512
+    return 0
+
+def calculate_delivery(amount: float) -> float:
+    """Расчет доставки"""
+    if amount <= 2000:
+        return 489
+    elif 2000 < amount <= 2500:
+        return 1371
+    elif 2500 < amount <= 3000:
+        return 1481
+    elif 3000 < amount <= 4000:
+        return 1861
+    elif 4000 < amount <= 5000:
+        return 1961
+    return 0
+
+def calculate_insurance(amount: float) -> float:
+    """Расчет страхового взноса"""
+    if amount <= 2000:
+        return 2750
+    elif 2000 < amount <= 17000:
+        return 4750
+    elif 17000 < amount <= 25000:
+        return 6750
+    elif 25000 < amount <= 35000:
+        return 8750
+    else:
+        return 9750
+
+def calculate_deposit(amount: float) -> float:
+    """Расчет залога"""
+    if amount <= 2000:
+        return 4750
+    elif 2000 < amount <= 17000:
+        return 6750
+    elif 17000 < amount <= 25000:
+        return 8750
+    elif 25000 < amount <= 35000:
+        return 10750
+    else:
+        return 11750
+
+def calculate_payments(order_amount: float) -> Dict[str, float]:
+    """Рассчитать все платежи для суммы заказа"""
+    return {
+        'duty': calculate_duty(order_amount),
+        'delivery': calculate_delivery(order_amount),
+        'insurance': calculate_insurance(order_amount),
+        'deposit': calculate_deposit(order_amount)
+    }
+
+def format_client_info(client: Client) -> str:
+    """Форматирование информации о клиенте"""
+    payments = client.get_payment_amounts()
+    return (
+        f"👤 Клиент: @{client.username}\n"
+        f"📦 Трек-номер: {client.track_number}\n"
+        f"📅 Срок: {client.days} дней\n"
+        f"💰 Сумма заказа: {client.order_amount:.2f}₽\n"
+        f"🛍 Количество товаров: {client.product_count}\n"
+        f"📅 Дата добавления: {client.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"💳 Платежи:\n"
+        f"   • Пошлина: {payments['duty']}₽ {'✅' if client.duty_paid else '❌'}\n"
+        f"   • Доставка: {payments['delivery']}₽ {'✅' if client.delivery_paid else '❌'}\n"
+        f"   • СВ: {payments['insurance']}₽ {'✅' if client.insurance_paid else '❌'}\n"
+        f"   • Залог: {payments['deposit']}₽ {'✅' if client.deposit_paid else '❌'}"
+    )
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start"""
+    await update.message.reply_text(
+        "Добро пожаловать в бот для управления клиентами!\n"
+        "Выберите действие из меню:",
+        reply_markup=MAIN_MENU_KEYBOARD
+    )
+
+async def add_client_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало добавления клиента"""
+    await update.message.reply_text("Введите имя пользователя (например, @username):")
+    return USERNAME
+
+async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение имени пользователя"""
+    context.user_data['username'] = update.message.text.strip()
+    await update.message.reply_text("Введите трек-номер:")
+    return TRACK_NUMBER
+
+async def get_track_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение трек-номера"""
+    context.user_data['track_number'] = update.message.text.strip()
+    await update.message.reply_text("Введите срок в днях:")
+    return DAYS
+
+async def get_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение срока"""
+    try:
+        days = int(update.message.text.strip())
+        if days <= 0:
+            raise ValueError
+        context.user_data['days'] = days
+        await update.message.reply_text("Введите сумму заказа в рублях:")
+        return ORDER_AMOUNT
+    except ValueError:
+        await update.message.reply_text("Пожалуйста, введите корректное число дней:")
+        return DAYS
+
+async def get_order_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение суммы заказа"""
+    try:
+        amount = float(update.message.text.strip())
+        if amount <= 0:
+            raise ValueError
+        context.user_data['order_amount'] = amount
+        await update.message.reply_text("Введите количество товаров:")
+        return PRODUCT_COUNT
+    except ValueError:
+        await update.message.reply_text("Пожалуйста, введите корректную сумму:")
+        return ORDER_AMOUNT
+
+async def get_product_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение количества товаров и сохранение клиента"""
+    try:
+        count = int(update.message.text.strip())
+        if count <= 0:
+            raise ValueError
         
-    def save_data(self):
-        """Сохраняет данные в файл"""
-        data = {
-            tag: {
-                **asdict(customer),
-                'delivery_date': customer.delivery_date.isoformat()
-            }
-            for tag, customer in self.customers.items()
-        }
-        with open('customers_data.json', 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    
-    def load_data(self):
-        """Загружает данные из файла"""
-        try:
-            if os.path.exists('customers_data.json'):
-                with open('customers_data.json', 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    for tag, customer_data in data.items():
-                        customer_data['delivery_date'] = date.fromisoformat(customer_data['delivery_date'])
-                        self.customers[tag] = Customer(**customer_data)
-        except Exception as e:
-            logger.error(f"Error loading data: {e}")
-            self.customers = {}
-    
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
-        keyboard = [
-            [InlineKeyboardButton("📝 Добавить покупателя", callback_data='add_customer')],
-            [InlineKeyboardButton("👥 Список покупателей", callback_data='list_customers')],
-            [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
-            [InlineKeyboardButton("ℹ️ Помощь", callback_data='help')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        # Сохранение клиента в базу данных
+        session = Session()
+        client = Client(
+            username=context.user_data['username'],
+            track_number=context.user_data['track_number'],
+            days=context.user_data['days'],
+            order_amount=context.user_data['order_amount'],
+            product_count=count
+        )
+        session.add(client)
+        session.commit()
+        
+        # Получаем ID добавленного клиента
+        client_id = client.id
+        session.close()
+        
+        # Рассчитываем дату напоминания
+        reminder_date = datetime.now() + timedelta(days=client.days)
         
         await update.message.reply_text(
-            "👋 Добро пожаловать в бот для управления доставками!\n\n"
-            "Выберите действие:",
-            reply_markup=reply_markup
-        )
-    
-    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик inline кнопок"""
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data
-        
-        if data == 'add_customer':
-            await query.edit_message_text(
-                "Введите тег покупателя (например: @username или номер телефона):"
-            )
-            return TAG
-            
-        elif data == 'list_customers':
-            await self.show_customers_list(query)
-            
-        elif data == 'settings':
-            await self.show_settings(query, context)
-            
-        elif data == 'help':
-            await self.show_help(query)
-            
-        elif data == 'back_to_menu':
-            await self.show_main_menu(query)
-            
-        elif data.startswith('customer_detail_'):
-            tag = data.split('_', 2)[2]
-            await self.show_customer_detail(query, tag)
-            
-        elif data.startswith('delete_customer_'):
-            tag = data.split('_', 2)[2]
-            await self.delete_customer(query, tag)
-            
-        elif data == 'toggle_order_amount':
-            context.user_data['order_amount_enabled'] = not context.user_data.get('order_amount_enabled', False)
-            await self.show_settings(query, context)
-            
-        elif data == 'toggle_split_payment':
-            context.user_data['split_payment_enabled'] = not context.user_data.get('split_payment_enabled', False)
-            await self.show_settings(query, context)
-            
-        elif data == 'set_reminder_time':
-            await query.edit_message_text(
-                "Введите время напоминания в формате ЧЧ:ММ (например, 10:00):"
-            )
-            return "REMINDER_TIME"
-    
-    async def get_customer_tag(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Получение тега покупателя"""
-        tag = update.message.text.strip()
-        context.user_data['current_customer'] = tag
-        
-        # Создаем клавиатуру для выбора даты
-        keyboard = []
-        today = date.today()
-        
-        for i in range(1, 8):
-            delivery_date = today + timedelta(days=i)
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{delivery_date.strftime('%d.%m.%Y')} ({delivery_date.strftime('%A')})",
-                    callback_data=f'date_{delivery_date.isoformat()}'
-                )
-            ])
-        
-        keyboard.append([InlineKeyboardButton("📅 Ввести другую дату", callback_data='custom_date')])
-        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data='back_to_menu')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            f"Покупатель: {tag}\n\nВыберите дату доставки:",
-            reply_markup=reply_markup
+            f"✅ Клиент успешно добавлен!\n"
+            f"ID: {client_id}\n"
+            f"Напоминание будет отправлено: {reminder_date.strftime('%d.%m.%Y')} в 12:00 по МСК",
+            reply_markup=MAIN_MENU_KEYBOARD
         )
         
-        return DELIVERY_DATE
-    
-    async def get_delivery_date(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка выбора даты доставки"""
-        query = update.callback_query
-        await query.answer()
+        # Планируем напоминание
+        scheduler = context.application.job_queue
+        reminder_time = reminder_date.replace(hour=9, minute=0, second=0)  # 12:00 МСК = 9:00 UTC
         
-        data = query.data
+        scheduler.run_once(
+            callback=send_reminder,
+            when=reminder_time,
+            data={'client_id': client_id, 'chat_id': update.effective_chat.id}
+        )
         
-        if data == 'custom_date':
-            await query.edit_message_text(
-                "Введите дату доставки в формате ДД.ММ.ГГГГ:"
-            )
-            return "CUSTOM_DATE"
-        
-        elif data.startswith('date_'):
-            delivery_date_str = data.split('_')[1]
-            delivery_date = date.fromisoformat(delivery_date_str)
-            await self.process_date_selection(query, context, delivery_date)
-            
         return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text("Пожалуйста, введите корректное количество товаров:")
+        return PRODUCT_COUNT
+
+async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
+    """Отправка напоминания о клиенте"""
+    job = context.job
+    client_id = job.data['client_id']
+    chat_id = job.data['chat_id']
     
-    async def process_date_selection(self, query, context, delivery_date):
-        """Обработка выбранной даты"""
-        tag = context.user_data['current_customer']
-        
-        # Проверяем, включены ли дополнительные настройки
-        order_amount_enabled = context.user_data.get('order_amount_enabled', False)
-        split_payment_enabled = context.user_data.get('split_payment_enabled', False)
-        
-        if order_amount_enabled:
-            await query.edit_message_text(
-                f"Покупатель: {tag}\n"
-                f"Дата доставки: {delivery_date.strftime('%d.%m.%Y')}\n\n"
-                "Введите сумму заказа:"
-            )
-            context.user_data['delivery_date'] = delivery_date
-            return ORDER_AMOUNT
-        else:
-            # Создаем покупателя без дополнительной информации
-            self.customers[tag] = Customer(
-                tag=tag,
-                delivery_date=delivery_date
-            )
-            self.save_data()
-            
-            await query.edit_message_text(
-                f"✅ Покупатель {tag} успешно добавлен!\n"
-                f"📅 Дата доставки: {delivery_date.strftime('%d.%m.%Y')}"
-            )
-            await self.show_main_menu_after_action(query)
-            return ConversationHandler.END
+    session = Session()
+    client = session.query(Client).filter_by(id=client_id).first()
     
-    async def get_order_amount(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Получение суммы заказа"""
-        try:
-            amount = float(update.message.text.replace(',', '.'))
-            context.user_data['order_amount'] = amount
-            
-            split_payment_enabled = context.user_data.get('split_payment_enabled', False)
-            
-            if split_payment_enabled:
-                keyboard = [
-                    [
-                        InlineKeyboardButton("✅ Да", callback_data='split_yes'),
-                        InlineKeyboardButton("❌ Нет", callback_data='split_no')
-                    ]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await update.message.reply_text(
-                    f"Сумма заказа: {amount} руб.\n\n"
-                    "Оплата сплитом (раздельная оплата)?",
-                    reply_markup=reply_markup
-                )
-                return SPLIT_PAYMENT
-            else:
-                await self.finalize_customer(update, context)
-                return ConversationHandler.END
-                
-        except ValueError:
-            await update.message.reply_text(
-                "Пожалуйста, введите корректную сумму (например: 1500.50):"
-            )
-            return ORDER_AMOUNT
-    
-    async def get_split_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка выбора сплит-оплаты"""
-        query = update.callback_query
-        await query.answer()
+    if client and not client.reminded:
+        client.reminded = True
+        session.commit()
         
-        split_payment = query.data == 'split_yes'
-        context.user_data['split_payment'] = split_payment
-        
-        await self.finalize_customer_query(query, context)
-        return ConversationHandler.END
-    
-    async def finalize_customer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Завершение создания покупателя без split оплаты"""
-        tag = context.user_data['current_customer']
-        delivery_date = context.user_data['delivery_date']
-        order_amount = context.user_data.get('order_amount')
-        
-        self.customers[tag] = Customer(
-            tag=tag,
-            delivery_date=delivery_date,
-            order_amount=order_amount,
-            split_payment=None
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏰ Напоминание!\n"
+                 f"Срок по клиенту @{client.username} истек.\n"
+                 f"Трек-номер: {client.track_number}\n"
+                 f"Сумма заказа: {client.order_amount}₽"
         )
-        self.save_data()
+    
+    session.close()
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена диалога"""
+    await update.message.reply_text(
+        "Действие отменено.",
+        reply_markup=MAIN_MENU_KEYBOARD
+    )
+    return ConversationHandler.END
+
+async def show_clients_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
+    """Показать список клиентов с пагинацией"""
+    session = Session()
+    clients = session.query(Client).order_by(Client.created_at.desc()).all()
+    session.close()
+    
+    if not clients:
+        await update.message.reply_text("Список клиентов пуст.")
+        return
+    
+    # Пагинация
+    items_per_page = 10
+    total_pages = (len(clients) + items_per_page - 1) // items_per_page
+    
+    if page >= total_pages:
+        page = total_pages - 1
+    
+    start_idx = page * items_per_page
+    end_idx = start_idx + items_per_page
+    page_clients = clients[start_idx:end_idx]
+    
+    keyboard = []
+    for client in page_clients:
+        keyboard.append([InlineKeyboardButton(
+            f"@{client.username} - {client.track_number}",
+            callback_data=f"client_{client.id}"
+        )])
+    
+    # Кнопки навигации
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"clients_page_{page-1}"))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"clients_page_{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="back_to_menu")])
+    
+    await update.message.reply_text(
+        f"📋 Список клиентов (стр. {page + 1}/{total_pages}):",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_client_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать информацию о конкретном клиенте"""
+    query = update.callback_query
+    await query.answer()
+    
+    client_id = int(query.data.split('_')[1])
+    
+    session = Session()
+    client = session.query(Client).filter_by(id=client_id).first()
+    session.close()
+    
+    if client:
+        await query.edit_message_text(
+            text=format_client_info(client),
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Назад к списку", callback_data="clients_page_0")
+            ]])
+        )
+    else:
+        await query.edit_message_text("Клиент не найден.")
+
+async def payments_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
+    """Показать список клиентов для выдачи оплат"""
+    session = Session()
+    clients = session.query(Client).order_by(Client.created_at.desc()).all()
+    session.close()
+    
+    if not clients:
+        await update.message.reply_text("Список клиентов пуст.")
+        return
+    
+    # Пагинация
+    items_per_page = 10
+    total_pages = (len(clients) + items_per_page - 1) // items_per_page
+    
+    if page >= total_pages:
+        page = total_pages - 1
+    
+    start_idx = page * items_per_page
+    end_idx = start_idx + items_per_page
+    page_clients = clients[start_idx:end_idx]
+    
+    keyboard = []
+    for client in page_clients:
+        payments = client.get_payment_amounts()
+        keyboard.append([InlineKeyboardButton(
+            f"@{client.username} - {client.order_amount}₽",
+            callback_data=f"pay_client_{client.id}"
+        )])
+    
+    # Кнопки навигации
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"payments_page_{page-1}"))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"payments_page_{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="back_to_menu")])
+    
+    await update.message.reply_text(
+        f"💰 Выдача оплат (стр. {page + 1}/{total_pages}):",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать варианты оплат для клиента"""
+    query = update.callback_query
+    await query.answer()
+    
+    client_id = int(query.data.split('_')[2])
+    context.user_data['payment_client_id'] = client_id
+    
+    session = Session()
+    client = session.query(Client).filter_by(id=client_id).first()
+    session.close()
+    
+    if client:
+        payments = client.get_payment_amounts()
         
+        keyboard = [
+            [
+                InlineKeyboardButton(f"Пошлина ({payments['duty']}₽)", 
+                                   callback_data=f"pay_type_duty_{client_id}"),
+                InlineKeyboardButton(f"Доставка ({payments['delivery']}₽)", 
+                                   callback_data=f"pay_type_delivery_{client_id}")
+            ],
+            [
+                InlineKeyboardButton(f"СВ ({payments['insurance']}₽)", 
+                                   callback_data=f"pay_type_insurance_{client_id}"),
+                InlineKeyboardButton(f"Залог ({payments['deposit']}₽)", 
+                                   callback_data=f"pay_type_deposit_{client_id}")
+            ],
+            [InlineKeyboardButton("Назад", callback_data="payments_page_0")]
+        ]
+        
+        await query.edit_message_text(
+            text=f"Выберите тип оплаты для @{client.username}:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+def get_payment_message(payment_type: str, amount: float, client: Client) -> str:
+    """Получить текст сообщения для оплаты"""
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d.%m")
+    
+    messages = {
+        'delivery': (
+            f"Добрый день, Ваш заказ прибыл к нам на склад в мск. "
+            f"Поставка рассортирована и готова к отправке, сумма оплаты доставки {amount}₽ "
+            f"(в стоимость включён курьер до пункта отправки). "
+            f"Напишите мне по оплате, выдам реквизиты"
+        ),
+        'duty': (
+            f"Добрый день, Ваш заказ прибыл к нам на склад в мск. "
+            f"Сумма оплаты за таможенную пошлину {amount}₽ "
+            f"(принцип расчета ТП можете посмотреть в интернете). "
+            f"Напишите мне по оплате, выдам реквизиты"
+        ),
+        'insurance': (
+            f"Страховой взнос по заказу {amount}₽. "
+            f"Сумма полностью возвратная т.е при уведомлении СДЭКа/Почты о получении товара клиентом "
+            f"сумма будет возвращена в полном объеме на номер карты "
+            f"(имя получателя и банк должен быть тот же, с которого была отправлена сумма)"
+        ),
+        'deposit': (
+            f"@{client.username} Залог для отправки {amount}₽, "
+            f"отправка {tomorrow} 11-12МСК, также не получили реквизиты на возврат СВ "
+            f"(имя отправителя как в чеке и тот же банк)"
+        )
+    }
+    
+    return messages.get(payment_type, "")
+
+async def send_payment_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправить сообщение с текстом оплаты"""
+    query = update.callback_query
+    await query.answer()
+    
+    data_parts = query.data.split('_')
+    payment_type = data_parts[2]
+    client_id = int(data_parts[3])
+    
+    session = Session()
+    client = session.query(Client).filter_by(id=client_id).first()
+    
+    if client:
+        payments = client.get_payment_amounts()
+        amount = payments.get(payment_type, 0)
+        
+        # Обновляем статус оплаты
+        if payment_type == 'duty':
+            client.duty_paid = True
+        elif payment_type == 'delivery':
+            client.delivery_paid = True
+        elif payment_type == 'insurance':
+            client.insurance_paid = True
+        elif payment_type == 'deposit':
+            client.deposit_paid = True
+        
+        session.commit()
+        
+        message_text = get_payment_message(payment_type, amount, client)
+        
+        await query.edit_message_text(
+            text=message_text,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Назад к оплатам", 
+                                   callback_data=f"pay_client_{client_id}")
+            ]])
+        )
+    
+    session.close()
+
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик callback запросов"""
+    query = update.callback_query
+    data = query.data
+    
+    if data == "back_to_menu":
+        await query.edit_message_text(
+            "Главное меню:",
+            reply_markup=MAIN_MENU_KEYBOARD
+        )
+    
+    elif data.startswith("clients_page_"):
+        page = int(data.split('_')[2])
+        await show_clients_list(update, context, page)
+    
+    elif data.startswith("client_"):
+        await show_client_info(update, context)
+    
+    elif data.startswith("payments_page_"):
+        page = int(data.split('_')[2])
+        await payments_list(update, context, page)
+    
+    elif data.startswith("pay_client_"):
+        await show_payment_options(update, context)
+    
+    elif data.startswith("pay_type_"):
+        await send_payment_message(update, context)
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстовых сообщений"""
+    text = update.message.text
+    
+    if text == "Добавить клиента":
+        return await add_client_start(update, context)
+    
+    elif text == "Список клиентов":
+        await show_clients_list(update, context)
+    
+    elif text == "Выдача оплат":
+        await payments_list(update, context)
+    
+    else:
         await update.message.reply_text(
-            f"✅ Покупатель {tag} успешно добавлен!\n"
-            f"📅 Дата доставки: {delivery_date.strftime('%d.%m.%Y')}\n"
-            f"💰 Сумма заказа: {order_amount} руб."
+            "Используйте кнопки меню для навигации.",
+            reply_markup=MAIN_MENU_KEYBOARD
         )
-        await self.show_main_menu_after_message(update)
-    
-    async def finalize_customer_query(self, query, context):
-        """Завершение создания покупателя через query"""
-        tag = context.user_data['current_customer']
-        delivery_date = context.user_data['delivery_date']
-        order_amount = context.user_data.get('order_amount')
-        split_payment = context.user_data.get('split_payment')
-        
-        self.customers[tag] = Customer(
-            tag=tag,
-            delivery_date=delivery_date,
-            order_amount=order_amount,
-            split_payment=split_payment
-        )
-        self.save_data()
-        
-        split_text = "Да" if split_payment else "Нет" if split_payment is not None else "Не указано"
-        
-        await query.edit_message_text(
-            f"✅ Покупатель {tag} успешно добавлен!\n"
-            f"📅 Дата доставки: {delivery_date.strftime('%d.%m.%Y')}\n"
-            f"💰 Сумма заказа: {order_amount} руб.\n"
-            f"💳 Сплит-оплата: {split_text}"
-        )
-        await self.show_main_menu_after_action(query)
-    
-    async def show_customers_list(self, query):
-        """Показать список покупателей"""
-        if not self.customers:
-            keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='back_to_menu')]]
-            await query.edit_message_text(
-                "Список покупателей пуст.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            return
-        
-        # Сортируем по дате доставки
-        sorted_customers = sorted(
-            self.customers.items(),
-            key=lambda x: x[1].delivery_date
-        )
-        
-        today = date.today()
-        message_text = "👥 Список покупателей:\n\n"
-        
-        for i, (tag, customer) in enumerate(sorted_customers, 1):
-            days_left = (customer.delivery_date - today).days
-            status = "🟢" if days_left > 0 else "🟡" if days_left == 0 else "🔴"
-            
-            message_text += (
-                f"{i}. {status} {tag}\n"
-                f"   📅 {customer.delivery_date.strftime('%d.%m.%Y')} "
-                f"(через {days_left} дней)\n"
-            )
-            
-            if customer.order_amount:
-                message_text += f"   💰 {customer.order_amount} руб.\n"
-            
-            if customer.split_payment is not None:
-                split_text = "Да" if customer.split_payment else "Нет"
-                message_text += f"   💳 Сплит: {split_text}\n"
-            
-            message_text += "\n"
-        
-        # Создаем клавиатуру с кнопками детализации
-        keyboard = []
-        for tag, _ in sorted_customers[:10]:  # Ограничиваем 10 покупателями для удобства
-            keyboard.append([InlineKeyboardButton(f"🔍 {tag}", callback_data=f'customer_detail_{tag}')])
-        
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='back_to_menu')])
-        
-        await query.edit_message_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    async def show_customer_detail(self, query, tag):
-        """Показать детали покупателя"""
-        if tag not in self.customers:
-            await query.answer("Покупатель не найден!")
-            return
-        
-        customer = self.customers[tag]
-        today = date.today()
-        days_left = (customer.delivery_date - today).days
-        
-        message_text = (
-            f"🔍 Детали покупателя:\n\n"
-            f"🏷️ Тег: {customer.tag}\n"
-            f"📅 Дата доставки: {customer.delivery_date.strftime('%d.%m.%Y')}\n"
-            f"⏱️ Осталось дней: {days_left}\n"
-        )
-        
-        if customer.order_amount:
-            message_text += f"💰 Сумма заказа: {customer.order_amount} руб.\n"
-        
-        if customer.split_payment is not None:
-            split_text = "Да" if customer.split_payment else "Нет"
-            message_text += f"💳 Сплит-оплата: {split_text}\n"
-        
-        keyboard = [
-            [InlineKeyboardButton("🗑️ Удалить", callback_data=f'delete_customer_{tag}')],
-            [InlineKeyboardButton("⬅️ Назад к списку", callback_data='list_customers')]
-        ]
-        
-        await query.edit_message_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    async def delete_customer(self, query, tag):
-        """Удалить покупателя"""
-        if tag in self.customers:
-            del self.customers[tag]
-            self.save_data()
-            await query.answer("Покупатель удален!")
-            await self.show_customers_list(query)
-        else:
-            await query.answer("Покупатель не найден!")
-    
-    async def show_settings(self, query, context):
-        """Показать настройки"""
-        order_amount_enabled = context.user_data.get('order_amount_enabled', False)
-        split_payment_enabled = context.user_data.get('split_payment_enabled', False)
-        
-        order_status = "✅ ВКЛ" if order_amount_enabled else "❌ ВЫКЛ"
-        split_status = "✅ ВКЛ" if split_payment_enabled else "❌ ВЫКЛ"
-        
-        keyboard = [
-            [InlineKeyboardButton(f"💰 Ввод суммы заказа: {order_status}", callback_data='toggle_order_amount')],
-            [InlineKeyboardButton(f"💳 Сплит-оплата: {split_status}", callback_data='toggle_split_payment')],
-            [InlineKeyboardButton("⏰ Настройка времени напоминаний", callback_data='set_reminder_time')],
-            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_menu')]
-        ]
-        
-        await query.edit_message_text(
-            "⚙️ Настройки бота:\n\n"
-            "Здесь вы можете включить/выключить дополнительные функции:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    async def show_help(self, query):
-        """Показать справку"""
-        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='back_to_menu')]]
-        
-        await query.edit_message_text(
-            "ℹ️ Помощь по использованию бота:\n\n"
-            "📝 Добавить покупателя - добавление нового покупателя с указанием даты доставки\n"
-            "👥 Список покупателей - просмотр всех покупателей и их деталей\n"
-            "⚙️ Настройки - включение/выключение дополнительных функций\n\n"
-            "Функции в настройках:\n"
-            "• Ввод суммы заказа - запрашивать сумму заказа при добавлении\n"
-            "• Сплит-оплата - спрашивать о раздельной оплате\n"
-            "• Настройка времени - установить время отправки напоминаний\n\n"
-            "Бот автоматически напоминает о доставке в день доставки!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    async def show_main_menu(self, query):
-        """Показать главное меню"""
-        keyboard = [
-            [InlineKeyboardButton("📝 Добавить покупателя", callback_data='add_customer')],
-            [InlineKeyboardButton("👥 Список покупателей", callback_data='list_customers')],
-            [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
-            [InlineKeyboardButton("ℹ️ Помощь", callback_data='help')]
-        ]
-        
-        await query.edit_message_text(
-            "Главное меню. Выберите действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    async def show_main_menu_after_action(self, query):
-        """Показать главное меню после действия"""
-        await asyncio.sleep(2)
-        await self.show_main_menu(query)
-    
-    async def show_main_menu_after_message(self, update):
-        """Показать главное меню после сообщения"""
-        keyboard = [
-            [InlineKeyboardButton("📝 Добавить покупателя", callback_data='add_customer')],
-            [InlineKeyboardButton("👥 Список покупателей", callback_data='list_customers')],
-            [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
-            [InlineKeyboardButton("ℹ️ Помощь", callback_data='help')]
-        ]
-        
-        await update.message.reply_text(
-            "Выберите следующее действие:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    async def custom_date_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка ввода кастомной даты"""
-        query = update.callback_query
-        await query.answer()
-        
-        try:
-            date_str = update.message.text.strip()
-            delivery_date = datetime.strptime(date_str, "%d.%m.%Y").date()
-            
-            if delivery_date < date.today():
-                await update.message.reply_text(
-                    "Дата не может быть в прошлом. Введите корректную дату:"
-                )
-                return "CUSTOM_DATE"
-            
-            await self.process_date_selection_message(update, context, delivery_date)
-            return ConversationHandler.END
-            
-        except ValueError:
-            await update.message.reply_text(
-                "Неверный формат даты. Введите дату в формате ДД.ММ.ГГГГ:"
-            )
-            return "CUSTOM_DATE"
-    
-    async def process_date_selection_message(self, update, context, delivery_date):
-        """Обработка выбранной даты из сообщения"""
-        tag = context.user_data['current_customer']
-        
-        order_amount_enabled = context.user_data.get('order_amount_enabled', False)
-        split_payment_enabled = context.user_data.get('split_payment_enabled', False)
-        
-        if order_amount_enabled:
-            await update.message.reply_text(
-                f"Покупатель: {tag}\n"
-                f"Дата доставки: {delivery_date.strftime('%d.%m.%Y')}\n\n"
-                "Введите сумму заказа:"
-            )
-            context.user_data['delivery_date'] = delivery_date
-            return ORDER_AMOUNT
-        else:
-            self.customers[tag] = Customer(
-                tag=tag,
-                delivery_date=delivery_date
-            )
-            self.save_data()
-            
-            await update.message.reply_text(
-                f"✅ Покупатель {tag} успешно добавлен!\n"
-                f"📅 Дата доставки: {delivery_date.strftime('%d.%m.%Y')}"
-            )
-            await self.show_main_menu_after_message(update)
-            return ConversationHandler.END
-    
-    async def check_deliveries(self, context: ContextTypes.DEFAULT_TYPE):
-        """Проверка доставок на сегодня и отправка напоминаний"""
-        today = date.today()
-        
-        for tag, customer in self.customers.items():
-            if customer.delivery_date == today and not customer.notified:
-                # Отправляем напоминание
-                try:
-                    await context.bot.send_message(
-                        chat_id=context.job.chat_id,
-                        text=f"🔔 Напоминание о доставке!\n\n"
-                             f"Сегодня доставка для покупателя: {tag}\n"
-                             f"Дата: {customer.delivery_date.strftime('%d.%m.%Y')}"
-                    )
-                    customer.notified = True
-                    self.save_data()
-                except Exception as e:
-                    logger.error(f"Error sending reminder: {e}")
-    
-    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Отмена текущего действия"""
-        await update.message.reply_text("Действие отменено.")
-        await self.show_main_menu_after_message(update)
-        return ConversationHandler.END
 
 def main():
-    """Основная функция запуска бота"""
-    # Вставьте ваш токен бота здесь
-    TOKEN = "8598049295:AAG0vdRpvKLvakRU8QUICbFOUQs1eJM6RQg"
+    """Основная функция"""
+    # Токен бота - замените на свой
+    TOKEN = "ВАШ_ТОКЕН_БОТА"
     
-    bot = DeliveryBot(TOKEN)
-    
-    # Создаем приложение
+    # Создание приложения
     application = Application.builder().token(TOKEN).build()
     
-    # Создаем ConversationHandler для добавления покупателей
+    # ConversationHandler для добавления клиента
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(bot.button_handler, pattern='^add_customer$')],
+        entry_points=[MessageHandler(filters.Text("Добавить клиента"), add_client_start)],
         states={
-            TAG: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.get_customer_tag)],
-            DELIVERY_DATE: [CallbackQueryHandler(bot.get_delivery_date)],
-            ORDER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.get_order_amount)],
-            SPLIT_PAYMENT: [CallbackQueryHandler(bot.get_split_payment)],
-            "CUSTOM_DATE": [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.custom_date_handler)],
-            "REMINDER_TIME": [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.set_reminder_time_handler)]
+            USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
+            TRACK_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_track_number)],
+            DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_days)],
+            ORDER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_order_amount)],
+            PRODUCT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_product_count)],
         },
-        fallbacks=[
-            CommandHandler('cancel', bot.cancel),
-            CallbackQueryHandler(bot.button_handler, pattern='^back_to_menu$')
-        ],
-        allow_reentry=True
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
     
-    # Добавляем обработчики
-    application.add_handler(CommandHandler("start", bot.start))
+    # Добавление обработчиков
+    application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
-    application.add_handler(CallbackQueryHandler(bot.button_handler))
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Добавляем обработчик для кастомной даты
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        bot.custom_date_handler
-    ), group=1)
-    
-    # Настраиваем задачу для проверки доставок
-    job_queue = application.job_queue
-    if job_queue:
-        job_queue.run_daily(
-            bot.check_deliveries,
-            time=datetime.time(hour=9, minute=0),  # Проверка в 9:00 утра
-            chat_id=None,  # Нужно будет установить при запуске
-        )
-    
-    # Запускаем бота
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Запуск бота
+    print("Бот запущен...")
+    application.run_polling(allowed_updates=Update.ALL_UPDATES)
 
 if __name__ == '__main__':
     main()
