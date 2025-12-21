@@ -554,7 +554,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Основная функция"""
     # Токен бота - замените на свой
-    TOKEN = "ВАШ_ТОКЕН_БОТА"
+    TOKEN = "8598049295:AAG0vdRpvKLvakRU8QUICbFOUQs1eJM6RQg"
     
     # Создание приложения
     application = Application.builder().token(TOKEN).build()
