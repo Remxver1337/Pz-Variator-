@@ -11,7 +11,7 @@ from telegram.ext import (
 
 # Настройка логирования
 logging.basicConfig(
-    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ def get_faq_keyboard():
 # Клавиатура для подтверждения
 def get_confirmation_keyboard():
     keyboard = [
-        [KeyboardButton("✅ Отправить заявку")],
+        [KeyboardButton("✅ Отправить заявку менеджеру")],
         [KeyboardButton("🔄 Заполнить заново")],
         [KeyboardButton("🔙 В главное меню")]
     ]
@@ -64,19 +64,19 @@ def get_confirmation_keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
-    user = update.effective_user
     welcome_message = (
-        f"👋 Здравствуйте, {user.first_name}!\n\n"
-        "Я помощник по подбору туров. Я помогу вам:\n"
-        "• Создать заявку на подбор тура (последовательный опрос)\n"
-        "• Ответить на популярные вопросы\n"
-        "• Связаться с менеджером\n\n"
+        "😉 *Добро пожаловать в бот канала Window Tour!*\n\n"
+        "🗣️ Бот предназначен для просмотра актуальных туров. Оформление проходит через менеджера @WindowVadim\n\n"
+        "🗣️ Также в бот добавлены и другие функции, которые помогут вам лучше ориентироваться по нашему каналу\n\n"
+        "🗣️ Бот принадлежит группе: https://t.me/WindowTour\n\n"
+        "🗣️ Просмотр туров производится только в боте либо через менеджера @WindowVadim\n\n"
         "Выберите интересующий вас раздел:"
     )
     
     await update.message.reply_text(
         welcome_message,
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode='Markdown'
     )
     return MAIN_MENU
 
@@ -91,8 +91,9 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(
             "📝 *Начинаем создание заявки на подбор тура*\n\n"
-            "Я буду задавать вам вопросы по очереди. Отвечайте на них одним сообщением.\n\n"
-            "**Вопрос 1/9:**\n"
+            "Я буду задавать вам вопросы по очереди. Отвечайте на них подробно, чтобы менеджер мог точнее подобрать тур.\n\n"
+            "➖➖➖➖➖➖➖➖➖➖\n"
+            "❓ *Вопрос 1/8:*\n"
             "🌍 *Куда хотите поехать?*\n"
             "(Страна, город, направление)",
             reply_markup=ReplyKeyboardRemove(),
@@ -112,11 +113,10 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📞 Остались вопросы?":
         contact_message = (
             "📞 *Остались вопросы?*\n\n"
-            "Вы можете связаться с нашим менеджером:\n"
-            "• В Telegram: @WindowVadim\n"
-            "• По телефону: +7 (999) 123-45-67\n"
-            "• По email: manager@tours.ru\n\n"
-            "Мы ответим на все ваши вопросы с 10:00 до 20:00 по московскому времени."
+            "Вы можете связаться с нашим менеджером напрямую:\n"
+            "• Telegram: @WindowVadim\n"
+            "• По телефону: +7 (999) 123-45-67\n\n"
+            "Или просто оставьте заявку, и менеджер свяжется с вами сам!"
         )
         await update.message.reply_text(
             contact_message,
@@ -139,7 +139,7 @@ async def faq_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "4. Тип отдыха\n"
             "5. Категория отеля\n"
             "6. Состав туристов\n\n"
-            "Просто нажмите 'Создать заявку' в главном меню, и я помогу вам!"
+            "После заполнения формы, менеджер @WindowVadim подберет для вас лучшие варианты и рассчитает стоимость!"
         ),
         "Документы для поездки": (
             "📋 *Документы для поездки*\n\n"
@@ -148,14 +148,16 @@ async def faq_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Виза (для некоторых стран)\n"
             "• Медицинская страховка\n"
             "• Авиабилеты и ваучеры на отель\n"
-            "• Доверенность на выезд детей (если едут без родителей)"
+            "• Доверенность на выезд детей (если едут без родителей)\n\n"
+            "Менеджер @WindowVadim подскажет точный список документов для вашего направления!"
         ),
         "Оплата и возврат": (
             "💳 *Оплата и возврат*\n\n"
             "• Предоплата для бронирования тура: 30-50%\n"
             "• Полная оплата за 7-14 дней до вылета\n"
             "• Возврат средств при отказе от тура зависит от условий отеля и авиакомпании\n"
-            "• Рекомендуем оформлять страховку от невыезда"
+            "• Рекомендуем оформлять страховку от невыезда\n\n"
+            "Точные условия вам расскажет менеджер @WindowVadim при подборе тура."
         )
     }
     
@@ -179,7 +181,8 @@ async def get_direction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
-        "**Вопрос 2/9:**\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "❓ *Вопрос 2/8:*\n"
         "💰 *Какой у вас бюджет?*\n"
         "(Общая сумма на человека, включен ли перелёт, питание и т.д.)",
         parse_mode='Markdown'
@@ -192,7 +195,8 @@ async def get_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
-        "**Вопрос 3/9:**\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "❓ *Вопрос 3/8:*\n"
         "📅 *Когда планируете поездку и на сколько дней?*\n"
         "(Точные или гибкие даты, количество ночей)",
         parse_mode='Markdown'
@@ -205,9 +209,10 @@ async def get_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
-        "**Вопрос 4/9:**\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "❓ *Вопрос 4/8:*\n"
         "🏖️ *Какой тип отдыха предпочитаете?*\n"
-        "(Пляжный, экскурсионный, активный, семейный, романтический, молодёжный)",
+        "(Пляжный, экскурсионный, активный, семейный, романтический, молодёжный или комбинированный)",
         parse_mode='Markdown'
     )
     return TYPE
@@ -218,9 +223,10 @@ async def get_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
-        "**Вопрос 5/9:**\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "❓ *Вопрос 5/8:*\n"
         "🏨 *Какие требования к размещению?*\n"
-        "(Категория отеля, локация, инфраструктура)",
+        "(Категория отеля, локация, инфраструктура: бассейн, SPA, анимация и т.д.)",
         parse_mode='Markdown'
     )
     return ACCOMMODATION
@@ -231,9 +237,10 @@ async def get_accommodation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
-        "**Вопрос 6/9:**\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "❓ *Вопрос 6/8:*\n"
         "✈️ *Какой транспорт предпочитаете?*\n"
-        "(Прямой рейс или с пересадкой, время вылета, аэропорт)",
+        "(Прямой рейс или с пересадкой, удобное время вылета, аэропорт вылета)",
         parse_mode='Markdown'
     )
     return TRANSPORT
@@ -244,7 +251,8 @@ async def get_transport(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
-        "**Вопрос 7/9:**\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "❓ *Вопрос 7/8:*\n"
         "👨‍👩‍👧 *Кто едет?*\n"
         "(Количество взрослых и детей, возраст детей, особые потребности)",
         parse_mode='Markdown'
@@ -257,9 +265,10 @@ async def get_tourists(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
-        "**Вопрос 8/9:**\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "❓ *Вопрос 8/8:*\n"
         "✨ *Дополнительные пожелания?*\n"
-        "(Экскурсии, русскоговорящий гид, конкретный отель, страховка и т.д.)",
+        "(Экскурсии, русскоговорящий гид, конкретный отель, расширенная страховка и т.д.)",
         parse_mode='Markdown'
     )
     return ADDITIONAL
@@ -270,86 +279,59 @@ async def get_additional(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Формируем предварительный просмотр заявки
     request = context.user_data['request']
-    preview = (
-        "📋 *Предварительный просмотр заявки*\n\n"
-        f"🌍 *Направление:* {request.get('direction', 'Не указано')}\n"
-        f"💰 *Бюджет:* {request.get('budget', 'Не указано')}\n"
-        f"📅 *Даты:* {request.get('dates', 'Не указано')}\n"
-        f"🏖️ *Тип отдыха:* {request.get('type', 'Не указано')}\n"
-        f"🏨 *Размещение:* {request.get('accommodation', 'Не указано')}\n"
-        f"✈️ *Транспорт:* {request.get('transport', 'Не указано')}\n"
-        f"👨‍👩‍👧 *Состав:* {request.get('tourists', 'Не указано')}\n"
-        f"✨ *Дополнительно:* {request.get('additional', 'Не указано')}\n\n"
-        "Все ли верно? Вы можете отправить заявку или заполнить заново."
+    
+    # Создаем сообщение с заполненными данными
+    filled_form = (
+        "✅ *ВЫ УСПЕШНО ЗАПОЛНИЛИ ЗАЯВКУ*\n"
+        "➖➖➖➖➖➖➖➖➖➖\n\n"
+        f"🌍 *Направление:*\n{request.get('direction', 'Не указано')}\n\n"
+        f"💰 *Бюджет:*\n{request.get('budget', 'Не указано')}\n\n"
+        f"📅 *Даты:*\n{request.get('dates', 'Не указано')}\n\n"
+        f"🏖️ *Тип отдыха:*\n{request.get('type', 'Не указано')}\n\n"
+        f"🏨 *Размещение:*\n{request.get('accommodation', 'Не указано')}\n\n"
+        f"✈️ *Транспорт:*\n{request.get('transport', 'Не указано')}\n\n"
+        f"👨‍👩‍👧 *Состав туристов:*\n{request.get('tourists', 'Не указано')}\n\n"
+        f"✨ *Дополнительно:*\n{request.get('additional', 'Не указано')}\n\n"
+        "➖➖➖➖➖➖➖➖➖➖\n\n"
+        "📤 *Перешлите это сообщение менеджеру @WindowVadim,*\n"
+        "он подберет Вам тур и отправит расчет стоимости"
     )
     
+    # Отправляем пользователю готовую форму для пересылки
     await update.message.reply_text(
-        preview,
-        reply_markup=get_confirmation_keyboard(),
+        filled_form,
         parse_mode='Markdown'
     )
-    return CONFIRMATION
+    
+    # Предлагаем дальнейшие действия
+    await update.message.reply_text(
+        "Что хотите сделать дальше?",
+        reply_markup=get_main_menu_keyboard()
+    )
+    
+    # Очищаем данные
+    context.user_data.clear()
+    return MAIN_MENU
 
 async def confirmation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик подтверждения заявки"""
+    """Обработчик подтверждения заявки (больше не используется, но оставим для совместимости)"""
     text = update.message.text
     user = update.effective_user
     
-    if text == "✅ Отправить заявку":
-        # Формируем финальную заявку
-        request = context.user_data['request']
-        username = user.username or "Не указан"
-        first_name = user.first_name or "Не указан"
-        
-        final_request = (
-            "✅ *НОВАЯ ЗАЯВКА НА ПОДБОР ТУРА*\n\n"
-            f"👤 *Клиент:* @{username} ({first_name})\n"
-            f"🆔 *ID:* {user.id}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🌍 *Направление:*\n{request.get('direction', 'Не указано')}\n\n"
-            f"💰 *Бюджет:*\n{request.get('budget', 'Не указано')}\n\n"
-            f"📅 *Даты:*\n{request.get('dates', 'Не указано')}\n\n"
-            f"🏖️ *Тип отдыха:*\n{request.get('type', 'Не указано')}\n\n"
-            f"🏨 *Размещение:*\n{request.get('accommodation', 'Не указано')}\n\n"
-            f"✈️ *Транспорт:*\n{request.get('transport', 'Не указано')}\n\n"
-            f"👨‍👩‍👧 *Состав туристов:*\n{request.get('tourists', 'Не указано')}\n\n"
-            f"✨ *Дополнительно:*\n{request.get('additional', 'Не указано')}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📅 *Время отправки:* {update.message.date.strftime('%d.%m.%Y %H:%M')}"
+    if text == "✅ Отправить заявку менеджеру":
+        # Этот блок больше не нужен, так как пользователь сам пересылает сообщение
+        await update.message.reply_text(
+            "Пожалуйста, перешлите готовое сообщение менеджеру @WindowVadim",
+            reply_markup=get_main_menu_keyboard()
         )
-        
-        # Отправляем менеджеру
-        try:
-            await context.bot.send_message(
-                chat_id=MANAGER_CHAT_ID,
-                text=final_request,
-                parse_mode='Markdown'
-            )
-            
-            await update.message.reply_text(
-                "✅ *Заявка успешно отправлена!*\n\n"
-                f"Менеджер @WindowVadim свяжется с вами в ближайшее время.\n"
-                "Спасибо за обращение!",
-                reply_markup=get_main_menu_keyboard(),
-                parse_mode='Markdown'
-            )
-            
-        except Exception as e:
-            logger.error(f"Failed to send to manager: {e}")
-            await update.message.reply_text(
-                "❌ Ошибка при отправке. Пожалуйста, свяжитесь с менеджером напрямую: @WindowVadim",
-                reply_markup=get_main_menu_keyboard()
-            )
-        
-        # Очищаем данные
-        context.user_data.clear()
         return MAIN_MENU
     
     elif text == "🔄 Заполнить заново":
         context.user_data['request'] = {}
         await update.message.reply_text(
-            "📝 *Начинаем заново*\n\n"
-            "**Вопрос 1/9:**\n"
+            "📝 *Начинаем заполнение заново*\n\n"
+            "➖➖➖➖➖➖➖➖➖➖\n"
+            "❓ *Вопрос 1/8:*\n"
             "🌍 *Куда хотите поехать?*",
             reply_markup=ReplyKeyboardRemove(),
             parse_mode='Markdown'
@@ -359,10 +341,18 @@ async def confirmation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif text == "🔙 В главное меню":
         context.user_data.clear()
         await update.message.reply_text(
-            "Главное меню:",
+            "Возврат в главное меню:",
             reply_markup=get_main_menu_keyboard()
         )
         return MAIN_MENU
+    
+    else:
+        # Если пользователь ввел что-то другое на этапе подтверждения
+        await update.message.reply_text(
+            "Пожалуйста, используйте кнопки меню.",
+            reply_markup=get_confirmation_keyboard()
+        )
+        return CONFIRMATION
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена действия"""
@@ -383,7 +373,7 @@ async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Запуск бота"""
-    # Создаем приложение
+    # Создаем приложение с вашим токеном
     application = Application.builder().token("8598049295:AAG0vdRpvKLvakRU8QUICbFOUQs1eJM6RQg").build()
     
     # Создаем ConversationHandler с последовательными шагами
@@ -409,7 +399,11 @@ def main():
     application.add_handler(MessageHandler(filters.COMMAND, handle_unknown))
     
     # Запускаем бота
-    print("Бот запущен...")
+    print("✅ Бот успешно запущен!")
+    print("📱 Токен: 8598049295:AAG0vdRpvKLvakRU8QUICbFOUQs1eJM6RQg")
+    print("👤 Менеджер: @WindowVadim")
+    print("📢 Канал: Window Tour")
+    print("➖➖➖➖➖➖➖➖➖➖")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
