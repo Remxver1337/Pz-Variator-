@@ -1,19 +1,14 @@
-import os
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
-import asyncio
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, 
-    MessageHandler, filters, ContextTypes, ConversationHandler
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    filters,
+    ContextTypes
 )
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, scoped_session
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 # Настройка логирования
 logging.basicConfig(
@@ -22,565 +17,396 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Конфигурация базы данных
-DATABASE_URL = "sqlite:///clients.db"
-Base = declarative_base()
-
-# Модель клиента
-class Client(Base):
-    __tablename__ = 'clients'
-    
-    id = Column(Integer, primary_key=True)
-    username = Column(String(100), nullable=False)
-    track_number = Column(String(100), nullable=False)
-    days = Column(Integer, nullable=False)
-    order_amount = Column(Float, nullable=False)
-    product_count = Column(Integer, nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
-    reminded = Column(Boolean, default=False)
-    
-    # Статусы оплат
-    duty_paid = Column(Boolean, default=False)
-    delivery_paid = Column(Boolean, default=False)
-    insurance_paid = Column(Boolean, default=False)
-    deposit_paid = Column(Boolean, default=False)
-    
-    def get_payment_amounts(self) -> Dict[str, float]:
-        """Рассчитать суммы всех платежей"""
-        return calculate_payments(self.order_amount)
-
-# Создание базы данных
-engine = create_engine(DATABASE_URL)
-Base.metadata.create_all(engine)
-Session = scoped_session(sessionmaker(bind=engine))
-
 # Состояния для ConversationHandler
-USERNAME, TRACK_NUMBER, DAYS, ORDER_AMOUNT, PRODUCT_COUNT = range(5)
+MAIN_MENU, QUESTION_FLOW, TOUR_REQUEST = range(3)
 
-# Главное меню
-MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
-    [["Добавить клиента", "Список клиентов"], ["Выдача оплат"]],
-    resize_keyboard=True
-)
+# Данные для хранения заявок (в реальном проекте используйте БД)
+user_requests = {}
 
-# Функции расчета платежей
-def calculate_duty(amount: float) -> float:
-    """Расчет пошлины"""
-    if 5000 <= amount < 6000:
-        return 2382
-    elif 6000 <= amount < 7000:
-        return 2473
-    elif 7000 <= amount < 8000:
-        return 2789
-    elif 9000 <= amount < 10000:
-        return 3474
-    elif 10000 <= amount < 11000:
-        return 3782
-    elif 11000 <= amount < 13500:
-        return 3986
-    elif 13500 <= amount < 15000:
-        return 4387
-    elif 15000 <= amount < 20000:
-        return 5781  # Среднее значение из диапазона
-    elif amount >= 20000:
-        return 8512
-    return 0
+# Клавиатура главного меню
+def get_main_menu_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("✍️ Создать заявку на подбор тура", callback_data="create_request")],
+        [InlineKeyboardButton("❓ Ответы на вопросы", callback_data="faq")],
+        [InlineKeyboardButton("📞 Остались вопросы? Связаться с менеджером", callback_data="contact")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-def calculate_delivery(amount: float) -> float:
-    """Расчет доставки"""
-    if amount <= 2000:
-        return 489
-    elif 2000 < amount <= 2500:
-        return 1371
-    elif 2500 < amount <= 3000:
-        return 1481
-    elif 3000 < amount <= 4000:
-        return 1861
-    elif 4000 < amount <= 5000:
-        return 1961
-    return 0
+# Клавиатура для разделов заявки
+def get_request_sections_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("🌍 Направление и страна", callback_data="section_direction")],
+        [InlineKeyboardButton("💰 Бюджет", callback_data="section_budget")],
+        [InlineKeyboardButton("📅 Даты и продолжительность", callback_data="section_dates")],
+        [InlineKeyboardButton("🏖️ Тип отдыха", callback_data="section_type")],
+        [InlineKeyboardButton("🏨 Размещение", callback_data="section_accommodation")],
+        [InlineKeyboardButton("✈️ Транспорт", callback_data="section_transport")],
+        [InlineKeyboardButton("👨‍👩‍👧 Состав туристов", callback_data="section_tourists")],
+        [InlineKeyboardButton("✨ Дополнительные пожелания", callback_data="section_additional")],
+        [InlineKeyboardButton("✅ Завершить и отправить заявку", callback_data="submit_request")],
+        [InlineKeyboardButton("🔙 В главное меню", callback_data="back_to_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-def calculate_insurance(amount: float) -> float:
-    """Расчет страхового взноса"""
-    if amount <= 2000:
-        return 2750
-    elif 2000 < amount <= 17000:
-        return 4750
-    elif 17000 < amount <= 25000:
-        return 6750
-    elif 25000 < amount <= 35000:
-        return 8750
-    else:
-        return 9750
+# Клавиатура для FAQ
+def get_faq_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("Как подобрать тур?", callback_data="faq_how")],
+        [InlineKeyboardButton("Документы для поездки", callback_data="faq_docs")],
+        [InlineKeyboardButton("Оплата и возврат", callback_data="faq_payment")],
+        [InlineKeyboardButton("🔙 В главное меню", callback_data="back_to_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-def calculate_deposit(amount: float) -> float:
-    """Расчет залога"""
-    if amount <= 2000:
-        return 4750
-    elif 2000 < amount <= 17000:
-        return 6750
-    elif 17000 < amount <= 25000:
-        return 8750
-    elif 25000 < amount <= 35000:
-        return 10750
-    else:
-        return 11750
-
-def calculate_payments(order_amount: float) -> Dict[str, float]:
-    """Рассчитать все платежи для суммы заказа"""
-    return {
-        'duty': calculate_duty(order_amount),
-        'delivery': calculate_delivery(order_amount),
-        'insurance': calculate_insurance(order_amount),
-        'deposit': calculate_deposit(order_amount)
-    }
-
-def format_client_info(client: Client) -> str:
-    """Форматирование информации о клиенте"""
-    payments = client.get_payment_amounts()
-    return (
-        f"👤 Клиент: @{client.username}\n"
-        f"📦 Трек-номер: {client.track_number}\n"
-        f"📅 Срок: {client.days} дней\n"
-        f"💰 Сумма заказа: {client.order_amount:.2f}₽\n"
-        f"🛍 Количество товаров: {client.product_count}\n"
-        f"📅 Дата добавления: {client.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"💳 Платежи:\n"
-        f"   • Пошлина: {payments['duty']}₽ {'✅' if client.duty_paid else '❌'}\n"
-        f"   • Доставка: {payments['delivery']}₽ {'✅' if client.delivery_paid else '❌'}\n"
-        f"   • СВ: {payments['insurance']}₽ {'✅' if client.insurance_paid else '❌'}\n"
-        f"   • Залог: {payments['deposit']}₽ {'✅' if client.deposit_paid else '❌'}"
-    )
+# Клавиатура для возврата в разделы заявки
+def get_back_to_sections_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("🔙 Вернуться к разделам заявки", callback_data="back_to_sections")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
-    await update.message.reply_text(
-        "Добро пожаловать в бот для управления клиентами!\n"
-        "Выберите действие из меню:",
-        reply_markup=MAIN_MENU_KEYBOARD
+    user = update.effective_user
+    welcome_message = (
+        f"👋 Здравствуйте, {user.first_name}!\n\n"
+        "Я помощник по подбору туров. Я помогу вам:\n"
+        "• Создать заявку на подбор тура\n"
+        "• Ответить на популярные вопросы\n"
+        "• Связаться с менеджером\n\n"
+        "Выберите интересующий вас раздел:"
     )
-
-async def add_client_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало добавления клиента"""
-    await update.message.reply_text("Введите имя пользователя (например, @username):")
-    return USERNAME
-
-async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение имени пользователя"""
-    context.user_data['username'] = update.message.text.strip()
-    await update.message.reply_text("Введите трек-номер:")
-    return TRACK_NUMBER
-
-async def get_track_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение трек-номера"""
-    context.user_data['track_number'] = update.message.text.strip()
-    await update.message.reply_text("Введите срок в днях:")
-    return DAYS
-
-async def get_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение срока"""
-    try:
-        days = int(update.message.text.strip())
-        if days <= 0:
-            raise ValueError
-        context.user_data['days'] = days
-        await update.message.reply_text("Введите сумму заказа в рублях:")
-        return ORDER_AMOUNT
-    except ValueError:
-        await update.message.reply_text("Пожалуйста, введите корректное число дней:")
-        return DAYS
-
-async def get_order_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение суммы заказа"""
-    try:
-        amount = float(update.message.text.strip())
-        if amount <= 0:
-            raise ValueError
-        context.user_data['order_amount'] = amount
-        await update.message.reply_text("Введите количество товаров:")
-        return PRODUCT_COUNT
-    except ValueError:
-        await update.message.reply_text("Пожалуйста, введите корректную сумму:")
-        return ORDER_AMOUNT
-
-async def get_product_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение количества товаров и сохранение клиента"""
-    try:
-        count = int(update.message.text.strip())
-        if count <= 0:
-            raise ValueError
-        
-        # Сохранение клиента в базу данных
-        session = Session()
-        client = Client(
-            username=context.user_data['username'],
-            track_number=context.user_data['track_number'],
-            days=context.user_data['days'],
-            order_amount=context.user_data['order_amount'],
-            product_count=count
-        )
-        session.add(client)
-        session.commit()
-        
-        # Получаем ID добавленного клиента
-        client_id = client.id
-        session.close()
-        
-        # Рассчитываем дату напоминания
-        reminder_date = datetime.now() + timedelta(days=client.days)
-        
-        await update.message.reply_text(
-            f"✅ Клиент успешно добавлен!\n"
-            f"ID: {client_id}\n"
-            f"Напоминание будет отправлено: {reminder_date.strftime('%d.%m.%Y')} в 12:00 по МСК",
-            reply_markup=MAIN_MENU_KEYBOARD
-        )
-        
-        # Планируем напоминание
-        scheduler = context.application.job_queue
-        reminder_time = reminder_date.replace(hour=9, minute=0, second=0)  # 12:00 МСК = 9:00 UTC
-        
-        scheduler.run_once(
-            callback=send_reminder,
-            when=reminder_time,
-            data={'client_id': client_id, 'chat_id': update.effective_chat.id}
-        )
-        
-        return ConversationHandler.END
-    except ValueError:
-        await update.message.reply_text("Пожалуйста, введите корректное количество товаров:")
-        return PRODUCT_COUNT
-
-async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Отправка напоминания о клиенте"""
-    job = context.job
-    client_id = job.data['client_id']
-    chat_id = job.data['chat_id']
-    
-    session = Session()
-    client = session.query(Client).filter_by(id=client_id).first()
-    
-    if client and not client.reminded:
-        client.reminded = True
-        session.commit()
-        
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"⏰ Напоминание!\n"
-                 f"Срок по клиенту @{client.username} истек.\n"
-                 f"Трек-номер: {client.track_number}\n"
-                 f"Сумма заказа: {client.order_amount}₽"
-        )
-    
-    session.close()
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена диалога"""
-    await update.message.reply_text(
-        "Действие отменено.",
-        reply_markup=MAIN_MENU_KEYBOARD
-    )
-    return ConversationHandler.END
-
-async def show_clients_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
-    """Показать список клиентов с пагинацией"""
-    session = Session()
-    clients = session.query(Client).order_by(Client.created_at.desc()).all()
-    session.close()
-    
-    if not clients:
-        await update.message.reply_text("Список клиентов пуст.")
-        return
-    
-    # Пагинация
-    items_per_page = 10
-    total_pages = (len(clients) + items_per_page - 1) // items_per_page
-    
-    if page >= total_pages:
-        page = total_pages - 1
-    
-    start_idx = page * items_per_page
-    end_idx = start_idx + items_per_page
-    page_clients = clients[start_idx:end_idx]
-    
-    keyboard = []
-    for client in page_clients:
-        keyboard.append([InlineKeyboardButton(
-            f"@{client.username} - {client.track_number}",
-            callback_data=f"client_{client.id}"
-        )])
-    
-    # Кнопки навигации
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"clients_page_{page-1}"))
-    
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"clients_page_{page+1}"))
-    
-    if nav_buttons:
-        keyboard.append(nav_buttons)
-    
-    keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="back_to_menu")])
     
     await update.message.reply_text(
-        f"📋 Список клиентов (стр. {page + 1}/{total_pages}):",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        welcome_message,
+        reply_markup=get_main_menu_keyboard()
     )
+    return MAIN_MENU
 
-async def show_client_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать информацию о конкретном клиенте"""
+async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик главного меню"""
     query = update.callback_query
     await query.answer()
     
-    client_id = int(query.data.split('_')[1])
-    
-    session = Session()
-    client = session.query(Client).filter_by(id=client_id).first()
-    session.close()
-    
-    if client:
+    if query.data == "create_request":
+        # Инициализация новой заявки
+        user_id = query.from_user.id
+        user_requests[user_id] = {}
+        
         await query.edit_message_text(
-            text=format_client_info(client),
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Назад к списку", callback_data="clients_page_0")
-            ]])
+            "📝 *Создание заявки на подбор тура*\n\n"
+            "Заполните информацию по разделам ниже. "
+            "После заполнения всех разделов нажмите 'Завершить и отправить'.\n\n"
+            "Выберите раздел для заполнения:",
+            reply_markup=get_request_sections_keyboard(),
+            parse_mode='Markdown'
         )
-    else:
-        await query.edit_message_text("Клиент не найден.")
+        return TOUR_REQUEST
+    
+    elif query.data == "faq":
+        await query.edit_message_text(
+            "❓ *Часто задаваемые вопросы*\n\n"
+            "Выберите интересующий вас вопрос:",
+            reply_markup=get_faq_keyboard(),
+            parse_mode='Markdown'
+        )
+        return QUESTION_FLOW
+    
+    elif query.data == "contact":
+        contact_message = (
+            "📞 *Остались вопросы?*\n\n"
+            "Вы можете связаться с нашим менеджером:\n"
+            "• По телефону: +7 (999) 123-45-67\n"
+            "• В Telegram: @tour_manager\n"
+            "• По email: manager@tours.ru\n\n"
+            "Мы ответим на все ваши вопросы с 10:00 до 20:00 по московскому времени."
+        )
+        await query.edit_message_text(
+            contact_message,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='Markdown'
+        )
+        return MAIN_MENU
 
-async def payments_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
-    """Показать список клиентов для выдачи оплат"""
-    session = Session()
-    clients = session.query(Client).order_by(Client.created_at.desc()).all()
-    session.close()
-    
-    if not clients:
-        await update.message.reply_text("Список клиентов пуст.")
-        return
-    
-    # Пагинация
-    items_per_page = 10
-    total_pages = (len(clients) + items_per_page - 1) // items_per_page
-    
-    if page >= total_pages:
-        page = total_pages - 1
-    
-    start_idx = page * items_per_page
-    end_idx = start_idx + items_per_page
-    page_clients = clients[start_idx:end_idx]
-    
-    keyboard = []
-    for client in page_clients:
-        payments = client.get_payment_amounts()
-        keyboard.append([InlineKeyboardButton(
-            f"@{client.username} - {client.order_amount}₽",
-            callback_data=f"pay_client_{client.id}"
-        )])
-    
-    # Кнопки навигации
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"payments_page_{page-1}"))
-    
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"payments_page_{page+1}"))
-    
-    if nav_buttons:
-        keyboard.append(nav_buttons)
-    
-    keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="back_to_menu")])
-    
-    await update.message.reply_text(
-        f"💰 Выдача оплат (стр. {page + 1}/{total_pages}):",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать варианты оплат для клиента"""
+async def faq_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик FAQ"""
     query = update.callback_query
     await query.answer()
     
-    client_id = int(query.data.split('_')[2])
-    context.user_data['payment_client_id'] = client_id
-    
-    session = Session()
-    client = session.query(Client).filter_by(id=client_id).first()
-    session.close()
-    
-    if client:
-        payments = client.get_payment_amounts()
-        
-        keyboard = [
-            [
-                InlineKeyboardButton(f"Пошлина ({payments['duty']}₽)", 
-                                   callback_data=f"pay_type_duty_{client_id}"),
-                InlineKeyboardButton(f"Доставка ({payments['delivery']}₽)", 
-                                   callback_data=f"pay_type_delivery_{client_id}")
-            ],
-            [
-                InlineKeyboardButton(f"СВ ({payments['insurance']}₽)", 
-                                   callback_data=f"pay_type_insurance_{client_id}"),
-                InlineKeyboardButton(f"Залог ({payments['deposit']}₽)", 
-                                   callback_data=f"pay_type_deposit_{client_id}")
-            ],
-            [InlineKeyboardButton("Назад", callback_data="payments_page_0")]
-        ]
-        
-        await query.edit_message_text(
-            text=f"Выберите тип оплаты для @{client.username}:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-def get_payment_message(payment_type: str, amount: float, client: Client) -> str:
-    """Получить текст сообщения для оплаты"""
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d.%m")
-    
-    messages = {
-        'delivery': (
-            f"Добрый день, Ваш заказ прибыл к нам на склад в мск. "
-            f"Поставка рассортирована и готова к отправке, сумма оплаты доставки {amount}₽ "
-            f"(в стоимость включён курьер до пункта отправки). "
-            f"Напишите мне по оплате, выдам реквизиты"
+    faq_answers = {
+        "faq_how": (
+            "🔍 *Как подобрать тур?*\n\n"
+            "Для подбора тура вам нужно:\n"
+            "1. Определить направление и страну\n"
+            "2. Установить бюджет\n"
+            "3. Выбрать даты поездки\n"
+            "4. Определить тип отдыха\n"
+            "5. Выбрать категорию отеля\n"
+            "6. Указать состав туристов\n\n"
+            "Вы можете создать заявку через главное меню, и наш менеджер подберет для вас лучшие варианты!"
         ),
-        'duty': (
-            f"Добрый день, Ваш заказ прибыл к нам на склад в мск. "
-            f"Сумма оплаты за таможенную пошлину {amount}₽ "
-            f"(принцип расчета ТП можете посмотреть в интернете). "
-            f"Напишите мне по оплате, выдам реквизиты"
+        "faq_docs": (
+            "📋 *Документы для поездки*\n\n"
+            "Для выезда за границу обычно требуются:\n"
+            "• Загранпаспорт (срок действия не менее 6 месяцев)\n"
+            "• Виза (для некоторых стран)\n"
+            "• Медицинская страховка\n"
+            "• Авиабилеты и ваучеры на отель\n"
+            "• Доверенность на выезд детей (если едут без родителей)"
         ),
-        'insurance': (
-            f"Страховой взнос по заказу {amount}₽. "
-            f"Сумма полностью возвратная т.е при уведомлении СДЭКа/Почты о получении товара клиентом "
-            f"сумма будет возвращена в полном объеме на номер карты "
-            f"(имя получателя и банк должен быть тот же, с которого была отправлена сумма)"
-        ),
-        'deposit': (
-            f"@{client.username} Залог для отправки {amount}₽, "
-            f"отправка {tomorrow} 11-12МСК, также не получили реквизиты на возврат СВ "
-            f"(имя отправителя как в чеке и тот же банк)"
+        "faq_payment": (
+            "💳 *Оплата и возврат*\n\n"
+            "• Предоплата для бронирования тура: 30-50%\n"
+            "• Полная оплата за 7-14 дней до вылета\n"
+            "• Возврат средств при отказе от тура зависит от условий отеля и авиакомпании\n"
+            "• Рекомендуем оформлять страховку от невыезда"
         )
     }
     
-    return messages.get(payment_type, "")
+    if query.data in faq_answers:
+        await query.edit_message_text(
+            faq_answers[query.data],
+            reply_markup=get_faq_keyboard(),
+            parse_mode='Markdown'
+        )
+    elif query.data == "back_to_main":
+        await query.edit_message_text(
+            "Главное меню:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return MAIN_MENU
 
-async def send_payment_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправить сообщение с текстом оплаты"""
+async def tour_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик разделов заявки"""
     query = update.callback_query
     await query.answer()
     
-    data_parts = query.data.split('_')
-    payment_type = data_parts[2]
-    client_id = int(data_parts[3])
+    user_id = query.from_user.id
     
-    session = Session()
-    client = session.query(Client).filter_by(id=client_id).first()
-    
-    if client:
-        payments = client.get_payment_amounts()
-        amount = payments.get(payment_type, 0)
-        
-        # Обновляем статус оплаты
-        if payment_type == 'duty':
-            client.duty_paid = True
-        elif payment_type == 'delivery':
-            client.delivery_paid = True
-        elif payment_type == 'insurance':
-            client.insurance_paid = True
-        elif payment_type == 'deposit':
-            client.deposit_paid = True
-        
-        session.commit()
-        
-        message_text = get_payment_message(payment_type, amount, client)
-        
-        await query.edit_message_text(
-            text=message_text,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Назад к оплатам", 
-                                   callback_data=f"pay_client_{client_id}")
-            ]])
-        )
-    
-    session.close()
-
-async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик callback запросов"""
-    query = update.callback_query
-    data = query.data
-    
-    if data == "back_to_menu":
+    if query.data == "back_to_main":
         await query.edit_message_text(
             "Главное меню:",
-            reply_markup=MAIN_MENU_KEYBOARD
+            reply_markup=get_main_menu_keyboard()
         )
+        return MAIN_MENU
     
-    elif data.startswith("clients_page_"):
-        page = int(data.split('_')[2])
-        await show_clients_list(update, context, page)
+    elif query.data == "back_to_sections":
+        await query.edit_message_text(
+            "📝 *Создание заявки на подбор тура*\n\n"
+            "Выберите раздел для заполнения:",
+            reply_markup=get_request_sections_keyboard(),
+            parse_mode='Markdown'
+        )
+        return TOUR_REQUEST
     
-    elif data.startswith("client_"):
-        await show_client_info(update, context)
+    elif query.data == "submit_request":
+        # Проверяем, заполнены ли обязательные разделы
+        required_sections = ['direction', 'budget', 'dates', 'tourists']
+        missing_sections = []
+        
+        for section in required_sections:
+            if section not in user_requests.get(user_id, {}):
+                missing_sections.append(section)
+        
+        if missing_sections:
+            await query.edit_message_text(
+                "⚠️ *Не все обязательные разделы заполнены!*\n\n"
+                "Пожалуйста, заполните следующие разделы:\n"
+                "• Направление и страна\n"
+                "• Бюджет\n"
+                "• Даты и продолжительность\n"
+                "• Состав туристов\n\n"
+                "После заполнения всех разделов нажмите 'Завершить и отправить'.",
+                reply_markup=get_request_sections_keyboard(),
+                parse_mode='Markdown'
+            )
+            return TOUR_REQUEST
+        
+        # Формируем текст заявки
+        request_data = user_requests[user_id]
+        request_text = (
+            "✅ *Новая заявка на подбор тура*\n\n"
+            f"*Направление и страна:*\n{request_data.get('direction', 'Не указано')}\n\n"
+            f"*Бюджет:*\n{request_data.get('budget', 'Не указано')}\n\n"
+            f"*Даты и продолжительность:*\n{request_data.get('dates', 'Не указано')}\n\n"
+            f"*Тип отдыха:*\n{request_data.get('type', 'Не указано')}\n\n"
+            f"*Размещение:*\n{request_data.get('accommodation', 'Не указано')}\n\n"
+            f"*Транспорт:*\n{request_data.get('transport', 'Не указано')}\n\n"
+            f"*Состав туристов:*\n{request_data.get('tourists', 'Не указано')}\n\n"
+            f"*Дополнительные пожелания:*\n{request_data.get('additional', 'Не указано')}"
+        )
+        
+        # Отправляем заявку менеджеру (замените на ID чата менеджера)
+        manager_chat_id = 123456789  # Замените на реальный ID
+        try:
+            await context.bot.send_message(
+                chat_id=manager_chat_id,
+                text=request_text,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Failed to send to manager: {e}")
+        
+        # Подтверждение пользователю
+        await query.edit_message_text(
+            "✅ *Заявка успешно отправлена!*\n\n"
+            "Наш менеджер свяжется с вами в ближайшее время для подбора лучших вариантов.\n"
+            "Спасибо за обращение!",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='Markdown'
+        )
+        
+        # Очищаем данные пользователя
+        del user_requests[user_id]
+        return MAIN_MENU
     
-    elif data.startswith("payments_page_"):
-        page = int(data.split('_')[2])
-        await payments_list(update, context, page)
+    # Обработка выбора конкретного раздела
+    section_info = {
+        "section_direction": (
+            "🌍 *Направление и страна*\n\n"
+            "Пожалуйста, укажите:\n"
+            "• Желаемую страну или направление\n"
+            "• Важны ли климатические особенности\n"
+            "• Есть ли виза, нужна ли помощь с визой\n"
+            "• Требования к безопасности"
+        ),
+        "section_budget": (
+            "💰 *Бюджет*\n\n"
+            "Пожалуйста, укажите:\n"
+            "• Общую сумму на человека\n"
+            "• Входит ли перелёт в бюджет\n"
+            "• Желаемое питание (RO, BB, HB, AI)\n"
+            "• Бюджет на дополнительные расходы (экскурсии, страховка, трансфер)"
+        ),
+        "section_dates": (
+            "📅 *Даты и продолжительность*\n\n"
+            "Пожалуйста, укажите:\n"
+            "• Точные или гибкие даты\n"
+            "• Желаемое количество ночей\n"
+            "• Готовы ли рассматривать высокий сезон (выше цена)"
+        ),
+        "section_type": (
+            "🏖️ *Тип отдыха*\n\n"
+            "Выберите предпочтительный тип отдыха:\n"
+            "• Пляжный\n"
+            "• Экскурсионный\n"
+            "• Активный (походы, спорт)\n"
+            "• Семейный\n"
+            "• Романтический\n"
+            "• Молодёжный"
+        ),
+        "section_accommodation": (
+            "🏨 *Размещение*\n\n"
+            "Пожалуйста, укажите:\n"
+            "• Желаемую категорию отеля (3*, 4*, 5*)\n"
+            "• Предпочтительную локацию (центр, первая линия, тихий район)\n"
+            "• Важную инфраструктуру (бассейн, SPA, анимация, детский клуб)"
+        ),
+        "section_transport": (
+            "✈️ *Транспорт*\n\n"
+            "Пожалуйста, укажите:\n"
+            "• Прямой рейс или возможна пересадка\n"
+            "• Удобное время вылета (особенно с детьми)\n"
+            "• Предпочтительный аэропорт вылета"
+        ),
+        "section_tourists": (
+            "👨‍👩‍👧 *Состав туристов*\n\n"
+            "Пожалуйста, укажите:\n"
+            "• Количество взрослых и детей\n"
+            "• Возраст детей\n"
+            "• Особые потребности (аллергии, диеты, инвалидность)"
+        ),
+        "section_additional": (
+            "✨ *Дополнительные пожелания*\n\n"
+            "Пожалуйста, укажите:\n"
+            "• Наличие экскурсий\n"
+            "• Русскоговорящий гид\n"
+            "• Конкретный регион или отель\n"
+            "• Медицинская страховка с расширенным покрытием"
+        )
+    }
     
-    elif data.startswith("pay_client_"):
-        await show_payment_options(update, context)
+    if query.data in section_info:
+        # Сохраняем текущий раздел в контексте
+        context.user_data['current_section'] = query.data
+        
+        await query.edit_message_text(
+            section_info[query.data],
+            reply_markup=get_back_to_sections_keyboard(),
+            parse_mode='Markdown'
+        )
+        # Переходим в режим ожидания текстового ответа
+        return TOUR_REQUEST
+
+async def save_section_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение данных из текстового ответа"""
+    user_id = update.effective_user.id
+    section = context.user_data.get('current_section')
     
-    elif data.startswith("pay_type_"):
-        await send_payment_message(update, context)
+    if section and user_id in user_requests:
+        # Сохраняем ответ пользователя
+        user_requests[user_id][section.replace('section_', '')] = update.message.text
+        
+        await update.message.reply_text(
+            "✅ Информация сохранена!\n\n"
+            "Выберите следующий раздел для заполнения:",
+            reply_markup=get_request_sections_keyboard()
+        )
+        return TOUR_REQUEST
+    
+    # Если не в процессе заполнения заявки
+    await update.message.reply_text(
+        "Пожалуйста, используйте меню для навигации.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    return MAIN_MENU
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена действия"""
+    await update.message.reply_text(
+        "Действие отменено. Возврат в главное меню.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    return MAIN_MENU
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстовых сообщений"""
-    text = update.message.text
-    
-    if text == "Добавить клиента":
-        return await add_client_start(update, context)
-    
-    elif text == "Список клиентов":
-        await show_clients_list(update, context)
-    
-    elif text == "Выдача оплат":
-        await payments_list(update, context)
-    
-    else:
-        await update.message.reply_text(
-            "Используйте кнопки меню для навигации.",
-            reply_markup=MAIN_MENU_KEYBOARD
-        )
+    """Обработка обычных сообщений"""
+    await update.message.reply_text(
+        "Пожалуйста, используйте кнопки меню для навигации.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    return MAIN_MENU
 
 def main():
-    """Основная функция"""
-    # Токен бота - замените на свой
-    TOKEN = "8598049295:AAG0vdRpvKLvakRU8QUICbFOUQs1eJM6RQg"
+    """Запуск бота"""
+    # Создаем приложение
+    application = Application.builder().token("8598049295:AAG0vdRpvKLvakRU8QUICbFOUQs1eJM6RQg").build()
     
-    # Создание приложения
-    application = Application.builder().token(TOKEN).build()
-    
-    # ConversationHandler для добавления клиента
+    # Создаем ConversationHandler
     conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Text("Добавить клиента"), add_client_start)],
+        entry_points=[CommandHandler('start', start)],
         states={
-            USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
-            TRACK_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_track_number)],
-            DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_days)],
-            ORDER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_order_amount)],
-            PRODUCT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_product_count)],
+            MAIN_MENU: [
+                CallbackQueryHandler(main_menu_handler),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+            ],
+            QUESTION_FLOW: [
+                CallbackQueryHandler(faq_handler),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+            ],
+            TOUR_REQUEST: [
+                CallbackQueryHandler(tour_request_handler),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_section_data)
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler('cancel', cancel)],
     )
     
-    # Добавление обработчиков
-    application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
-    application.add_handler(CallbackQueryHandler(handle_callback_query))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запуск бота
+    # Запускаем бота
     print("Бот запущен...")
-    application.run_polling(allowed_updates=Update.ALL_UPDATES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
