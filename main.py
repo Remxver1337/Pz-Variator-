@@ -38,8 +38,8 @@ MANAGER_CHAT_ID = "@WindowVadim"  # или числовой ID: 123456789
 def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton("✍️ Создать заявку на подбор тура")],
-        [KeyboardButton("❓ Ответы на вопросы")],
-        [KeyboardButton("📞 Остались вопросы?")]
+        [KeyboardButton("📚 Ответы на вопросы")],
+        [KeyboardButton("❓ Остались вопросы?")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -49,16 +49,15 @@ def get_faq_keyboard():
         [KeyboardButton("🔍 Как подобрать тур?")],
         [KeyboardButton("📋 Документы для поездки")],
         [KeyboardButton("💳 Оплата и возврат")],
-        [KeyboardButton("🔙 В главное меню")]
+        [KeyboardButton("🖼️ Вернуться в главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Клавиатура для подтверждения
-def get_confirmation_keyboard():
+# Клавиатура для этапов заполнения анкеты (с кнопками назад)
+def get_question_keyboard():
     keyboard = [
-        [KeyboardButton("✅ Отправить заявку менеджеру")],
-        [KeyboardButton("🔄 Заполнить заново")],
-        [KeyboardButton("🔙 В главное меню")]
+        [KeyboardButton("🔙 Вернуться назад")],
+        [KeyboardButton("🖼️ Вернуться в главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -88,6 +87,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Инициализация новой заявки
         context.user_data.clear()
         context.user_data['request'] = {}
+        context.user_data['question_index'] = 1  # Для отслеживания текущего вопроса
         
         await update.message.reply_text(
             "📝 *Начинаем создание заявки на подбор тура*\n\n"
@@ -96,27 +96,25 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❓ *Вопрос 1/8:*\n"
             "🌍 *Куда хотите поехать?*\n"
             "(Страна, город, направление)",
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=get_question_keyboard(),
             parse_mode='Markdown'
         )
         return DIRECTION
     
-    elif text == "❓ Ответы на вопросы":
+    elif text == "📚 Ответы на вопросы":
         await update.message.reply_text(
-            "❓ *Часто задаваемые вопросы*\n\n"
+            "📚 *Ответы на вопросы*\n\n"
             "Выберите интересующий вас вопрос:",
             reply_markup=get_faq_keyboard(),
             parse_mode='Markdown'
         )
         return QUESTION_FLOW
     
-    elif text == "📞 Остались вопросы?":
+    elif text == "❓ Остались вопросы?":
         contact_message = (
-            "📞 *Остались вопросы?*\n\n"
-            "Вы можете связаться с нашим менеджером напрямую:\n"
-            "• Telegram: @WindowVadim\n"
-            "• По телефону: +7 (999) 123-45-67\n\n"
-            "Или просто оставьте заявку, и менеджер свяжется с вами сам!"
+            "❓ *Остались вопросы? Пиши!*\n\n"
+            "В порядке очереди мы тебе обязательно ответим 👨‍💻\n\n"
+            "Напиши нам: @WindowVadim"
         )
         await update.message.reply_text(
             contact_message,
@@ -169,7 +167,7 @@ async def faq_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_faq_keyboard(),
             parse_mode='Markdown'
         )
-    elif text == "🔙 В главное меню":
+    elif text == "🖼️ Вернуться в главное меню":
         await update.message.reply_text(
             "Главное меню:",
             reply_markup=get_main_menu_keyboard()
@@ -177,9 +175,111 @@ async def faq_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MAIN_MENU
     return QUESTION_FLOW
 
+async def handle_back_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик навигации во время заполнения анкеты"""
+    text = update.message.text
+    current_state = context.user_data.get('current_state')
+    
+    if text == "🖼️ Вернуться в главное меню":
+        context.user_data.clear()
+        await update.message.reply_text(
+            "Главное меню:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return MAIN_MENU
+    
+    elif text == "🔙 Вернуться назад":
+        # Возвращаемся к предыдущему вопросу
+        question_index = context.user_data.get('question_index', 1)
+        if question_index > 1:
+            question_index -= 1
+            context.user_data['question_index'] = question_index
+            
+            # Определяем, на какой вопрос вернуться
+            if question_index == 1:
+                await update.message.reply_text(
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "❓ *Вопрос 1/8:*\n"
+                    "🌍 *Куда хотите поехать?*\n"
+                    "(Страна, город, направление)",
+                    reply_markup=get_question_keyboard(),
+                    parse_mode='Markdown'
+                )
+                return DIRECTION
+            elif question_index == 2:
+                await update.message.reply_text(
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "❓ *Вопрос 2/8:*\n"
+                    "💰 *Какой у вас бюджет?*\n"
+                    "(Общая сумма на человека, включен ли перелёт, питание и т.д.)",
+                    reply_markup=get_question_keyboard(),
+                    parse_mode='Markdown'
+                )
+                return BUDGET
+            elif question_index == 3:
+                await update.message.reply_text(
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "❓ *Вопрос 3/8:*\n"
+                    "📅 *Когда планируете поездку и на сколько дней?*\n"
+                    "(Точные или гибкие даты, количество ночей)",
+                    reply_markup=get_question_keyboard(),
+                    parse_mode='Markdown'
+                )
+                return DATES
+            elif question_index == 4:
+                await update.message.reply_text(
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "❓ *Вопрос 4/8:*\n"
+                    "🏖️ *Какой тип отдыха предпочитаете?*\n"
+                    "(Пляжный, экскурсионный, активный, семейный, романтический, молодёжный или комбинированный)",
+                    reply_markup=get_question_keyboard(),
+                    parse_mode='Markdown'
+                )
+                return TYPE
+            elif question_index == 5:
+                await update.message.reply_text(
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "❓ *Вопрос 5/8:*\n"
+                    "🏨 *Какие требования к размещению?*\n"
+                    "(Категория отеля, локация, инфраструктура: бассейн, SPA, анимация и т.д.)",
+                    reply_markup=get_question_keyboard(),
+                    parse_mode='Markdown'
+                )
+                return ACCOMMODATION
+            elif question_index == 6:
+                await update.message.reply_text(
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "❓ *Вопрос 6/8:*\n"
+                    "✈️ *Какой транспорт предпочитаете?*\n"
+                    "(Прямой рейс или с пересадкой, удобное время вылета, аэропорт вылета)",
+                    reply_markup=get_question_keyboard(),
+                    parse_mode='Markdown'
+                )
+                return TRANSPORT
+            elif question_index == 7:
+                await update.message.reply_text(
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "❓ *Вопрос 7/8:*\n"
+                    "👨‍👩‍👧 *Кто едет?*\n"
+                    "(Количество взрослых и детей, возраст детей, особые потребности)",
+                    reply_markup=get_question_keyboard(),
+                    parse_mode='Markdown'
+                )
+                return TOURISTS
+    
+    # Если нажата какая-то другая кнопка, но мы не обработали
+    return current_state
+
 async def get_direction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение направления"""
-    context.user_data['request']['direction'] = update.message.text
+    text = update.message.text
+    
+    # Проверяем, не нажата ли кнопка навигации
+    if text in ["🔙 Вернуться назад", "🖼️ Вернуться в главное меню"]:
+        return await handle_back_navigation(update, context)
+    
+    context.user_data['request']['direction'] = text
+    context.user_data['question_index'] = 2
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
@@ -187,13 +287,21 @@ async def get_direction(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ *Вопрос 2/8:*\n"
         "💰 *Какой у вас бюджет?*\n"
         "(Общая сумма на человека, включен ли перелёт, питание и т.д.)",
+        reply_markup=get_question_keyboard(),
         parse_mode='Markdown'
     )
     return BUDGET
 
 async def get_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение бюджета"""
-    context.user_data['request']['budget'] = update.message.text
+    text = update.message.text
+    
+    # Проверяем, не нажата ли кнопка навигации
+    if text in ["🔙 Вернуться назад", "🖼️ Вернуться в главное меню"]:
+        return await handle_back_navigation(update, context)
+    
+    context.user_data['request']['budget'] = text
+    context.user_data['question_index'] = 3
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
@@ -201,13 +309,21 @@ async def get_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ *Вопрос 3/8:*\n"
         "📅 *Когда планируете поездку и на сколько дней?*\n"
         "(Точные или гибкие даты, количество ночей)",
+        reply_markup=get_question_keyboard(),
         parse_mode='Markdown'
     )
     return DATES
 
 async def get_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение дат"""
-    context.user_data['request']['dates'] = update.message.text
+    text = update.message.text
+    
+    # Проверяем, не нажата ли кнопка навигации
+    if text in ["🔙 Вернуться назад", "🖼️ Вернуться в главное меню"]:
+        return await handle_back_navigation(update, context)
+    
+    context.user_data['request']['dates'] = text
+    context.user_data['question_index'] = 4
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
@@ -215,13 +331,21 @@ async def get_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ *Вопрос 4/8:*\n"
         "🏖️ *Какой тип отдыха предпочитаете?*\n"
         "(Пляжный, экскурсионный, активный, семейный, романтический, молодёжный или комбинированный)",
+        reply_markup=get_question_keyboard(),
         parse_mode='Markdown'
     )
     return TYPE
 
 async def get_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение типа отдыха"""
-    context.user_data['request']['type'] = update.message.text
+    text = update.message.text
+    
+    # Проверяем, не нажата ли кнопка навигации
+    if text in ["🔙 Вернуться назад", "🖼️ Вернуться в главное меню"]:
+        return await handle_back_navigation(update, context)
+    
+    context.user_data['request']['type'] = text
+    context.user_data['question_index'] = 5
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
@@ -229,13 +353,21 @@ async def get_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ *Вопрос 5/8:*\n"
         "🏨 *Какие требования к размещению?*\n"
         "(Категория отеля, локация, инфраструктура: бассейн, SPA, анимация и т.д.)",
+        reply_markup=get_question_keyboard(),
         parse_mode='Markdown'
     )
     return ACCOMMODATION
 
 async def get_accommodation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение требований к размещению"""
-    context.user_data['request']['accommodation'] = update.message.text
+    text = update.message.text
+    
+    # Проверяем, не нажата ли кнопка навигации
+    if text in ["🔙 Вернуться назад", "🖼️ Вернуться в главное меню"]:
+        return await handle_back_navigation(update, context)
+    
+    context.user_data['request']['accommodation'] = text
+    context.user_data['question_index'] = 6
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
@@ -243,13 +375,21 @@ async def get_accommodation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ *Вопрос 6/8:*\n"
         "✈️ *Какой транспорт предпочитаете?*\n"
         "(Прямой рейс или с пересадкой, удобное время вылета, аэропорт вылета)",
+        reply_markup=get_question_keyboard(),
         parse_mode='Markdown'
     )
     return TRANSPORT
 
 async def get_transport(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение требований к транспорту"""
-    context.user_data['request']['transport'] = update.message.text
+    text = update.message.text
+    
+    # Проверяем, не нажата ли кнопка навигации
+    if text in ["🔙 Вернуться назад", "🖼️ Вернуться в главное меню"]:
+        return await handle_back_navigation(update, context)
+    
+    context.user_data['request']['transport'] = text
+    context.user_data['question_index'] = 7
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
@@ -257,13 +397,21 @@ async def get_transport(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ *Вопрос 7/8:*\n"
         "👨‍👩‍👧 *Кто едет?*\n"
         "(Количество взрослых и детей, возраст детей, особые потребности)",
+        reply_markup=get_question_keyboard(),
         parse_mode='Markdown'
     )
     return TOURISTS
 
 async def get_tourists(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение состава туристов"""
-    context.user_data['request']['tourists'] = update.message.text
+    text = update.message.text
+    
+    # Проверяем, не нажата ли кнопка навигации
+    if text in ["🔙 Вернуться назад", "🖼️ Вернуться в главное меню"]:
+        return await handle_back_navigation(update, context)
+    
+    context.user_data['request']['tourists'] = text
+    context.user_data['question_index'] = 8
     
     await update.message.reply_text(
         "✅ Информация сохранена!\n\n"
@@ -271,13 +419,20 @@ async def get_tourists(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ *Вопрос 8/8:*\n"
         "✨ *Дополнительные пожелания?*\n"
         "(Экскурсии, русскоговорящий гид, конкретный отель, расширенная страховка и т.д.)",
+        reply_markup=get_question_keyboard(),
         parse_mode='Markdown'
     )
     return ADDITIONAL
 
 async def get_additional(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение дополнительных пожеланий"""
-    context.user_data['request']['additional'] = update.message.text
+    text = update.message.text
+    
+    # Проверяем, не нажата ли кнопка навигации
+    if text in ["🔙 Вернуться назад", "🖼️ Вернуться в главное меню"]:
+        return await handle_back_navigation(update, context)
+    
+    context.user_data['request']['additional'] = text
     
     # Формируем предварительный просмотр заявки
     request = context.user_data['request']
@@ -302,59 +457,13 @@ async def get_additional(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отправляем пользователю готовую форму для пересылки
     await update.message.reply_text(
         filled_form,
+        reply_markup=get_main_menu_keyboard(),
         parse_mode='Markdown'
-    )
-    
-    # Предлагаем дальнейшие действия
-    await update.message.reply_text(
-        "Что хотите сделать дальше?",
-        reply_markup=get_main_menu_keyboard()
     )
     
     # Очищаем данные
     context.user_data.clear()
     return MAIN_MENU
-
-async def confirmation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик подтверждения заявки (больше не используется, но оставим для совместимости)"""
-    text = update.message.text
-    user = update.effective_user
-    
-    if text == "✅ Отправить заявку менеджеру":
-        # Этот блок больше не нужен, так как пользователь сам пересылает сообщение
-        await update.message.reply_text(
-            "Пожалуйста, перешлите готовое сообщение менеджеру @WindowVadim",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return MAIN_MENU
-    
-    elif text == "🔄 Заполнить заново":
-        context.user_data['request'] = {}
-        await update.message.reply_text(
-            "📝 *Начинаем заполнение заново*\n\n"
-            "➖➖➖➖➖➖➖➖➖➖\n"
-            "❓ *Вопрос 1/8:*\n"
-            "🌍 *Куда хотите поехать?*",
-            reply_markup=ReplyKeyboardRemove(),
-            parse_mode='Markdown'
-        )
-        return DIRECTION
-    
-    elif text == "🔙 В главное меню":
-        context.user_data.clear()
-        await update.message.reply_text(
-            "Возврат в главное меню:",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return MAIN_MENU
-    
-    else:
-        # Если пользователь ввел что-то другое на этапе подтверждения
-        await update.message.reply_text(
-            "Пожалуйста, используйте кнопки меню.",
-            reply_markup=get_confirmation_keyboard()
-        )
-        return CONFIRMATION
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена действия"""
@@ -392,7 +501,6 @@ def main():
             TRANSPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_transport)],
             TOURISTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_tourists)],
             ADDITIONAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_additional)],
-            CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirmation_handler)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
