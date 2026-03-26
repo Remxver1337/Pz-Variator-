@@ -8,10 +8,10 @@ import json
 import os
 
 # ========== КОНФИГУРАЦИЯ ==========
-# Вставьте ваш новый токен сюда
+# ВСТАВЬТЕ ВАШ НОВЫЙ ТОКЕН (после отзыва старого)
 BOT_TOKEN = "8797595582:AAFgl9BAxHXlG9lpjIGeNYEWLrx2SvQ7owY"
 
-# ID администратора для логов
+# ID администратора
 ADMIN_ID = 8333791296
 
 # КАНАЛ ДЛЯ ЛОГОВ (сюда идут сообщения с данными авторов)
@@ -35,9 +35,101 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
-# Функция для сохранения лога в файл
-def save_log_to_file(log_data):
-    """Сохраняет лог в JSON файл"""
+# Функция для получения полной информации о пользователе (ID и имя ВСЕГДА есть)
+def get_user_info(user) -> dict:
+    """Возвращает полную информацию о пользователе"""
+    return {
+        "user_id": user.id,  # ✅ Всегда доступен
+        "first_name": user.first_name,  # ✅ Всегда доступен
+        "last_name": user.last_name if user.last_name else "",  # Может быть None
+        "full_name": f"{user.first_name} {user.last_name}".strip() if user.last_name else user.first_name,
+        "username": user.username if user.username else "❌ скрыт или не задан",  # Может быть скрыт
+        "language": user.language_code if user.language_code else "неизвестно"
+    }
+
+
+# Функция для форматирования лога (ВСЕГДА с ID и именем)
+def format_log_message(user_info: dict, content_type: str, content: str = "", caption: str = "") -> str:
+    """Форматирует сообщение для лога с ОБЯЗАТЕЛЬНЫМ отображением ID и имени"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    log_text = (
+        f"📋 **НОВОЕ СООБЩЕНИЕ**\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 **ID:** `{user_info['user_id']}`\n"
+        f"👤 **Имя:** {user_info['full_name']}\n"
+    )
+    
+    # Добавляем username, если есть
+    if user_info['username'] != "❌ скрыт или не задан":
+        log_text += f"📱 **Username:** @{user_info['username']}\n"
+    else:
+        log_text += f"📱 **Username:** {user_info['username']}\n"
+    
+    log_text += (
+        f"⏰ **Время:** {now}\n"
+        f"📝 **Тип:** {content_type}\n"
+    )
+    
+    # Добавляем содержимое
+    if content_type == "text":
+        log_text += f"💬 **Текст:** {content}\n"
+    elif content_type == "photo":
+        log_text += f"🖼 **Фото:** отправлено\n"
+        if caption:
+            log_text += f"📝 **Подпись:** {caption}\n"
+    elif content_type == "video":
+        log_text += f"🎥 **Видео:** отправлено\n"
+        if caption:
+            log_text += f"📝 **Подпись:** {caption}\n"
+    elif content_type == "document":
+        log_text += f"📄 **Документ:** {content}\n"
+        if caption:
+            log_text += f"📝 **Подпись:** {caption}\n"
+    elif content_type == "voice":
+        log_text += f"🎤 **Голосовое:** отправлено\n"
+    elif content_type == "sticker":
+        log_text += f"🏷 **Стикер:** {content}\n"
+    
+    log_text += f"━━━━━━━━━━━━━━━━━━"
+    
+    return log_text
+
+
+# Функция для сохранения лога в файл (ВСЕГДА с ID и именем)
+def save_log_to_file(user_info: dict, content_type: str, content: str = "", caption: str = ""):
+    """Сохраняет лог в JSON файл с обязательными ID и именем"""
+    log_data = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "user_id": user_info["user_id"],  # ✅ Всегда сохраняется
+        "user_name": user_info["full_name"],  # ✅ Всегда сохраняется
+        "first_name": user_info["first_name"],
+        "last_name": user_info["last_name"],
+        "username": user_info["username"],
+        "language": user_info["language"],
+        "type": content_type
+    }
+    
+    # Добавляем содержимое
+    if content_type == "text":
+        log_data["content"] = content
+    elif content_type == "photo":
+        log_data["has_media"] = True
+        if caption:
+            log_data["caption"] = caption
+    elif content_type == "video":
+        log_data["has_media"] = True
+        if caption:
+            log_data["caption"] = caption
+    elif content_type == "document":
+        log_data["file_name"] = content
+        if caption:
+            log_data["caption"] = caption
+    elif content_type == "voice":
+        log_data["has_media"] = True
+    elif content_type == "sticker":
+        log_data["emoji"] = content
+    
     try:
         if os.path.exists(LOG_FILE):
             with open(LOG_FILE, 'r', encoding='utf-8') as f:
@@ -53,9 +145,9 @@ def save_log_to_file(log_data):
         logging.error(f"Ошибка сохранения лога: {e}")
 
 
-# Функция для поиска сообщений пользователя
+# Функция для поиска сообщений пользователя по ID или имени
 def get_user_messages(user_identifier):
-    """Возвращает все сообщения пользователя по ID, имени или username"""
+    """Возвращает все сообщения пользователя по ID или имени"""
     try:
         if not os.path.exists(LOG_FILE):
             return []
@@ -65,7 +157,7 @@ def get_user_messages(user_identifier):
         
         user_messages = []
         
-        # Пробуем найти по ID (если identifier - число)
+        # Пробуем найти по ID
         try:
             user_id = int(user_identifier)
             user_messages = [log for log in all_logs if log.get('user_id') == user_id]
@@ -74,13 +166,10 @@ def get_user_messages(user_identifier):
         except ValueError:
             pass
         
-        # Поиск по имени или username (частичное совпадение)
+        # Поиск по имени
         for log in all_logs:
             user_name = log.get('user_name', '').lower()
-            username = log.get('username', '').lower()
-            identifier_lower = user_identifier.lower()
-            
-            if identifier_lower in user_name or identifier_lower in username:
+            if user_identifier.lower() in user_name:
                 user_messages.append(log)
         
         return user_messages
@@ -105,16 +194,16 @@ def format_user_messages_page(messages, page=0, per_page=5):
     
     # Информация о пользователе
     user_info = messages[0]
-    user_name = user_info.get('user_name', 'Неизвестно')
     user_id = user_info.get('user_id', 'Неизвестно')
+    user_name = user_info.get('user_name', 'Неизвестно')
     username = user_info.get('username', 'Нет')
     
     text = (
         f"👤 **Информация о пользователе**\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"📛 Имя: {user_name}\n"
-        f"🆔 ID: `{user_id}`\n"
-        f"📱 Username: @{username}" if username != 'Нет' else "📱 Username: нет\n"
+        f"🆔 **ID:** `{user_id}`\n"
+        f"👤 **Имя:** {user_name}\n"
+        f"📱 **Username:** {username}\n"
         f"\n📊 **Сообщения ({len(messages)} шт.)**\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
     )
@@ -169,76 +258,16 @@ def create_pagination_keyboard(user_identifier, page, total_pages):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# Функция для отправки лога в канал для логов
-async def send_log_to_channel(message: Message, content_type: str = "text"):
-    """Отправляет подробный лог сообщения в канал для логов"""
-    user = message.from_user
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# Функция для отправки лога админу и в канал
+async def send_log_to_channel(message: Message, content_type: str = "text", content: str = "", caption: str = ""):
+    """Отправляет подробный лог сообщения с ОБЯЗАТЕЛЬНЫМ ID и именем"""
+    user_info = get_user_info(message.from_user)
     
-    # Формируем информацию об авторе
-    author_info = (
-        f"👤 **Автор:** {user.full_name}\n"
-        f"🆔 **ID:** `{user.id}`\n"
-        f"📱 **Username:** @{user.username}" if user.username else "📱 **Username:** нет"
-    )
-    
-    # Базовая информация о сообщении
-    log_text = (
-        f"📋 **НОВОЕ СООБЩЕНИЕ**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"{author_info}\n"
-        f"⏰ **Время:** {now}\n"
-        f"📝 **Тип:** {content_type}\n"
-    )
-    
-    # Данные для сохранения в файл
-    log_data = {
-        "timestamp": now,
-        "user_id": user.id,
-        "user_name": user.full_name,
-        "username": user.username,
-        "type": content_type
-    }
-    
-    # Добавляем содержимое в зависимости от типа
-    if content_type == "text":
-        log_text += f"💬 **Текст:** {message.text}\n"
-        log_data["content"] = message.text
-        
-    elif content_type == "photo":
-        log_text += f"🖼 **Фото:** отправлено\n"
-        if message.caption:
-            log_text += f"📝 **Подпись:** {message.caption}\n"
-            log_data["caption"] = message.caption
-        log_data["has_media"] = True
-        
-    elif content_type == "video":
-        log_text += f"🎥 **Видео:** отправлено\n"
-        if message.caption:
-            log_text += f"📝 **Подпись:** {message.caption}\n"
-            log_data["caption"] = message.caption
-        log_data["has_media"] = True
-        
-    elif content_type == "document":
-        file_name = message.document.file_name
-        log_text += f"📄 **Документ:** {file_name}\n"
-        if message.caption:
-            log_text += f"📝 **Подпись:** {message.caption}\n"
-            log_data["caption"] = message.caption
-        log_data["file_name"] = file_name
-        
-    elif content_type == "voice":
-        log_text += f"🎤 **Голосовое:** отправлено\n"
-        log_data["has_media"] = True
-        
-    elif content_type == "sticker":
-        log_text += f"🏷 **Стикер:** {message.sticker.emoji}\n"
-        log_data["emoji"] = message.sticker.emoji
-        
-    log_text += f"━━━━━━━━━━━━━━━━━━"
+    # Форматируем лог
+    log_text = format_log_message(user_info, content_type, content, caption)
     
     # Сохраняем в файл
-    save_log_to_file(log_data)
+    save_log_to_file(user_info, content_type, content, caption)
     
     # Отправляем в канал для логов
     try:
@@ -251,28 +280,23 @@ async def send_log_to_channel(message: Message, content_type: str = "text"):
     except Exception as e:
         logging.error(f"Не удалось отправить лог в канал: {e}")
     
-    # Также отправляем админу личное сообщение
+    # Отправляем админу личное сообщение с ID и именем
     try:
-        admin_log = f"📨 Новое сообщение от {user.full_name} (ID: {user.id})"
+        admin_log = f"📨 Новое сообщение\n🆔 ID: {user_info['user_id']}\n👤 Имя: {user_info['full_name']}"
         await bot.send_message(ADMIN_ID, admin_log)
     except:
         pass
 
 
-# Функция для публикации сообщения в канал
+# Функция для публикации сообщения в канал (анонимно)
 async def publish_to_channel(message: Message, content_type: str = "text"):
     """Публикует анонимное сообщение в канал"""
     try:
         if content_type == "text":
-            # Форматируем текст сообщения
-            formatted_text = (
-                f"📢 Новое сообщение!\n\n"
-                f"{message.text}"
-            )
+            formatted_text = f"📢 Новое сообщение!\n\n{message.text}"
             await bot.send_message(PUBLIC_CHANNEL_ID, formatted_text)
             
         elif content_type == "photo":
-            # Отправляем фото с подписью
             caption = f"📢 Новое сообщение!\n\n{message.caption}" if message.caption else "📢 Новое сообщение!"
             await bot.send_photo(
                 PUBLIC_CHANNEL_ID,
@@ -281,7 +305,6 @@ async def publish_to_channel(message: Message, content_type: str = "text"):
             )
             
         elif content_type == "video":
-            # Отправляем видео с подписью
             caption = f"📢 Новое сообщение!\n\n{message.caption}" if message.caption else "📢 Новое сообщение!"
             await bot.send_video(
                 PUBLIC_CHANNEL_ID,
@@ -290,7 +313,6 @@ async def publish_to_channel(message: Message, content_type: str = "text"):
             )
             
         elif content_type == "document":
-            # Отправляем документ с подписью
             caption = f"📢 Новое сообщение!\n\n{message.caption}" if message.caption else "📢 Новое сообщение!"
             await bot.send_document(
                 PUBLIC_CHANNEL_ID,
@@ -299,7 +321,6 @@ async def publish_to_channel(message: Message, content_type: str = "text"):
             )
             
         elif content_type == "voice":
-            # Отправляем голосовое
             await bot.send_voice(
                 PUBLIC_CHANNEL_ID,
                 message.voice.file_id,
@@ -330,8 +351,9 @@ async def cmd_start(message: Message):
     )
     await message.answer(welcome_text)
     
-    # Логируем запуск бота пользователем
-    await send_log_to_channel(message, "start_command")
+    # Логируем запуск с ID и именем
+    user_info = get_user_info(message.from_user)
+    await send_log_to_channel(message, "start_command", f"Пользователь {user_info['full_name']} запустил бота")
 
 
 # Обработчик команды /help
@@ -355,31 +377,24 @@ async def cmd_user(message: Message):
         await message.answer("❌ У вас нет прав для этой команды.")
         return
     
-    # Получаем аргумент (имя/айди/тег)
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer(
-            "❌ Укажите ID, имя или username пользователя\n\n"
+            "❌ Укажите ID или имя пользователя\n\n"
             "Примеры:\n"
             "/user 123456789\n"
-            "/user Иван\n"
-            "/user @ivan"
+            "/user Иван"
         )
         return
     
     user_identifier = args[1].strip()
-    
-    # Ищем сообщения пользователя
     user_messages = get_user_messages(user_identifier)
     
     if not user_messages:
         await message.answer(f"❌ Пользователь «{user_identifier}» не найден или нет сообщений.")
         return
     
-    # Форматируем первую страницу
     text, page, total_pages = format_user_messages_page(user_messages, 0)
-    
-    # Создаем клавиатуру
     keyboard = create_pagination_keyboard(user_identifier, page, total_pages)
     
     await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
@@ -388,16 +403,13 @@ async def cmd_user(message: Message):
 # Обработчик инлайн кнопок пагинации
 @dp.callback_query(F.data.startswith("user_page:"))
 async def handle_user_page(callback: CallbackQuery):
-    # Проверяем, что это админ
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("❌ У вас нет прав", show_alert=True)
         return
     
-    # Разбираем данные
     _, user_identifier, page_str = callback.data.split(":")
     page = int(page_str)
     
-    # Получаем сообщения пользователя
     user_messages = get_user_messages(user_identifier)
     
     if not user_messages:
@@ -405,13 +417,9 @@ async def handle_user_page(callback: CallbackQuery):
         await callback.answer()
         return
     
-    # Форматируем страницу
     text, current_page, total_pages = format_user_messages_page(user_messages, page)
-    
-    # Создаем клавиатуру
     keyboard = create_pagination_keyboard(user_identifier, current_page, total_pages)
     
-    # Редактируем сообщение
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
     await callback.answer()
 
@@ -430,18 +438,16 @@ async def close_user_menu(callback: CallbackQuery):
 # Обработчик текстовых сообщений
 @dp.message(F.text & ~F.text.startswith('/'))
 async def handle_text(message: Message):
-    # Отправляем лог в канал логов
-    await send_log_to_channel(message, "text")
-    # Публикуем в публичный канал
+    await send_log_to_channel(message, "text", message.text)
     await publish_to_channel(message, "text")
-    # Простое подтверждение
     await message.answer("✅ Сообщение отправлено")
 
 
 # Обработчик фото
 @dp.message(F.photo)
 async def handle_photo(message: Message):
-    await send_log_to_channel(message, "photo")
+    caption = message.caption if message.caption else ""
+    await send_log_to_channel(message, "photo", "", caption)
     await publish_to_channel(message, "photo")
     await message.answer("✅ Сообщение отправлено")
 
@@ -449,7 +455,8 @@ async def handle_photo(message: Message):
 # Обработчик видео
 @dp.message(F.video)
 async def handle_video(message: Message):
-    await send_log_to_channel(message, "video")
+    caption = message.caption if message.caption else ""
+    await send_log_to_channel(message, "video", "", caption)
     await publish_to_channel(message, "video")
     await message.answer("✅ Сообщение отправлено")
 
@@ -457,7 +464,9 @@ async def handle_video(message: Message):
 # Обработчик документов
 @dp.message(F.document)
 async def handle_document(message: Message):
-    await send_log_to_channel(message, "document")
+    file_name = message.document.file_name
+    caption = message.caption if message.caption else ""
+    await send_log_to_channel(message, "document", file_name, caption)
     await publish_to_channel(message, "document")
     await message.answer("✅ Сообщение отправлено")
 
@@ -473,7 +482,8 @@ async def handle_voice(message: Message):
 # Обработчик стикеров
 @dp.message(F.sticker)
 async def handle_sticker(message: Message):
-    await send_log_to_channel(message, "sticker")
+    emoji = message.sticker.emoji
+    await send_log_to_channel(message, "sticker", emoji)
     await message.answer("🎭 Стикеры не публикуются. Отправьте текст, фото или видео.")
 
 
