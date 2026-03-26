@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -22,6 +22,9 @@ PUBLIC_CHANNEL_ID = -1003881321896
 
 # Файл для сохранения логов
 LOG_FILE = "logs.json"
+
+# НАСТРОЙКИ КУЛДАУНА
+COOLDOWN_MINUTES = 2  # Задержка между сообщениями в минутах
 # ==================================
 
 # Включаем логирование
@@ -33,6 +36,51 @@ logging.basicConfig(
 # Создаем бота и диспетчер
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# Словарь для хранения времени последнего сообщения пользователя
+# {user_id: datetime_last_message}
+user_last_message = {}
+
+
+# Функция проверки кулдауна
+def check_cooldown(user_id: int) -> tuple:
+    """
+    Проверяет, может ли пользователь отправить сообщение
+    Возвращает (can_send: bool, remaining_seconds: int)
+    """
+    if user_id == ADMIN_ID:
+        # Администратор не имеет ограничений
+        return True, 0
+    
+    if user_id in user_last_message:
+        last_time = user_last_message[user_id]
+        time_diff = datetime.now() - last_time
+        cooldown = timedelta(minutes=COOLDOWN_MINUTES)
+        
+        if time_diff < cooldown:
+            remaining = cooldown - time_diff
+            remaining_seconds = int(remaining.total_seconds())
+            return False, remaining_seconds
+    
+    return True, 0
+
+
+# Функция обновления времени последнего сообщения
+def update_cooldown(user_id: int):
+    """Обновляет время последнего сообщения пользователя"""
+    user_last_message[user_id] = datetime.now()
+
+
+# Функция форматирования времени ожидания
+def format_cooldown_time(seconds: int) -> str:
+    """Форматирует секунды в читаемый вид"""
+    minutes = seconds // 60
+    secs = seconds % 60
+    
+    if minutes > 0:
+        return f"{minutes} мин {secs} сек"
+    else:
+        return f"{secs} сек"
 
 
 # Функция для получения полной информации о пользователе (ID и имя ВСЕГДА есть)
@@ -339,6 +387,7 @@ async def cmd_start(message: Message):
         "👋 Привет! Я бот для «Подслушано школы»\n\n"
         "📝 Как это работает:\n"
         "Ты отправляешь мне сообщение, а я публикую его анонимно.\n\n"
+        f"⏱ Ограничение: {COOLDOWN_MINUTES} минуты между сообщениями\n\n"
         "✏️ Что можно отправлять:\n"
         "• Текстовые сообщения\n"
         "• Фото и видео\n"
@@ -362,6 +411,7 @@ async def cmd_help(message: Message):
     help_text = (
         "📖 Помощь\n\n"
         "Отправь мне любое сообщение, и я опубликую его анонимно\n"
+        f"⏱ Между сообщениями нужно ждать {COOLDOWN_MINUTES} минуты\n\n"
         "Доступные команды:\n"
         "/start - Начать работу\n"
         "/help - Помощь"
@@ -435,35 +485,88 @@ async def close_user_menu(callback: CallbackQuery):
     await callback.answer("Меню закрыто")
 
 
-# Обработчик текстовых сообщений
+# Обработчик текстовых сообщений с проверкой кулдауна
 @dp.message(F.text & ~F.text.startswith('/'))
 async def handle_text(message: Message):
+    user_id = message.from_user.id
+    
+    # Проверяем кулдаун
+    can_send, remaining = check_cooldown(user_id)
+    
+    if not can_send:
+        wait_time = format_cooldown_time(remaining)
+        await message.answer(f"⏱ Подождите {wait_time} перед отправкой следующего сообщения.")
+        return
+    
+    # Обновляем время последнего сообщения
+    update_cooldown(user_id)
+    
+    # Отправляем лог и публикуем
     await send_log_to_channel(message, "text", message.text)
     await publish_to_channel(message, "text")
     await message.answer("✅ Сообщение отправлено")
 
 
-# Обработчик фото
+# Обработчик фото с проверкой кулдауна
 @dp.message(F.photo)
 async def handle_photo(message: Message):
+    user_id = message.from_user.id
+    
+    # Проверяем кулдаун
+    can_send, remaining = check_cooldown(user_id)
+    
+    if not can_send:
+        wait_time = format_cooldown_time(remaining)
+        await message.answer(f"⏱ Подождите {wait_time} перед отправкой следующего сообщения.")
+        return
+    
+    # Обновляем время последнего сообщения
+    update_cooldown(user_id)
+    
     caption = message.caption if message.caption else ""
     await send_log_to_channel(message, "photo", "", caption)
     await publish_to_channel(message, "photo")
     await message.answer("✅ Сообщение отправлено")
 
 
-# Обработчик видео
+# Обработчик видео с проверкой кулдауна
 @dp.message(F.video)
 async def handle_video(message: Message):
+    user_id = message.from_user.id
+    
+    # Проверяем кулдаун
+    can_send, remaining = check_cooldown(user_id)
+    
+    if not can_send:
+        wait_time = format_cooldown_time(remaining)
+        await message.answer(f"⏱ Подождите {wait_time} перед отправкой следующего сообщения.")
+        return
+    
+    # Обновляем время последнего сообщения
+    update_cooldown(user_id)
+    
     caption = message.caption if message.caption else ""
     await send_log_to_channel(message, "video", "", caption)
     await publish_to_channel(message, "video")
     await message.answer("✅ Сообщение отправлено")
 
 
-# Обработчик документов
+# Обработчик документов с проверкой кулдауна
 @dp.message(F.document)
 async def handle_document(message: Message):
+    user_id = message.from_user.id
+    
+    # Проверяем кулдаун
+    can_send, remaining = check_cooldown(user_id)
+    
+    if not can_send:
+        wait_time = format_cooldown_time(remaining)
+        await message.answer(f"⏱ Подождите {wait_time} перед отправкой следующего сообщения.")
+        return
+    
+    # Обновляем время последнего сообщения
+    update_cooldown(user_id)
+    
     file_name = message.document.file_name
     caption = message.caption if message.caption else ""
     await send_log_to_channel(message, "document", file_name, caption)
@@ -471,9 +574,22 @@ async def handle_document(message: Message):
     await message.answer("✅ Сообщение отправлено")
 
 
-# Обработчик голосовых сообщений
+# Обработчик голосовых сообщений с проверкой кулдауна
 @dp.message(F.voice)
 async def handle_voice(message: Message):
+    user_id = message.from_user.id
+    
+    # Проверяем кулдаун
+    can_send, remaining = check_cooldown(user_id)
+    
+    if not can_send:
+        wait_time = format_cooldown_time(remaining)
+        await message.answer(f"⏱ Подождите {wait_time} перед отправкой следующего сообщения.")
+        return
+    
+    # Обновляем время последнего сообщения
+    update_cooldown(user_id)
+    
     await send_log_to_channel(message, "voice")
     await publish_to_channel(message, "voice")
     await message.answer("✅ Сообщение отправлено")
@@ -506,13 +622,37 @@ async def cmd_stats(message: Message):
                 f"📊 Статистика\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"Сообщений: {total_messages}\n"
-                f"Пользователей: {unique_users}"
+                f"Пользователей: {unique_users}\n"
+                f"⏱ Кулдаун: {COOLDOWN_MINUTES} мин"
             )
             await message.answer(stats_text)
         else:
             await message.answer("📭 Логов пока нет.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
+
+
+# Команда для админа - сброс кулдауна пользователя
+@dp.message(Command("reset_cooldown"))
+async def cmd_reset_cooldown(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+    
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("❌ Укажите ID пользователя\n\nПример: /reset_cooldown 123456789")
+        return
+    
+    try:
+        user_id = int(args[1])
+        if user_id in user_last_message:
+            del user_last_message[user_id]
+            await message.answer(f"✅ Кулдаун для пользователя {user_id} сброшен.")
+        else:
+            await message.answer(f"ℹ️ У пользователя {user_id} нет активного кулдауна.")
+    except ValueError:
+        await message.answer("❌ Неверный формат ID. Введите число.")
 
 
 # Команда для админа - получить логи файлом
@@ -540,6 +680,7 @@ async def main():
     logging.info("🚀 Запуск бота...")
     logging.info(f"📋 Логи отправляются в канал: {LOG_CHANNEL_ID}")
     logging.info(f"📢 Публикация в канал: {PUBLIC_CHANNEL_ID}")
+    logging.info(f"⏱ Кулдаун между сообщениями: {COOLDOWN_MINUTES} минут")
     
     # Проверяем доступ к каналам
     try:
