@@ -9,10 +9,10 @@ import os
 
 # ========== КОНФИГУРАЦИЯ ==========
 # ВСТАВЬТЕ ВАШ НОВЫЙ ТОКЕН (после отзыва старого)
-BOT_TOKEN = "8797595582:AAFgl9BAxHXlG9lpjIGeNYEWLrx2SvQ7owY"
+BOT_TOKEN = "8651970099:AAFlnsHu42jhntz534DQULqNGGb3YVdbNm4"
 
 # ID администратора
-ADMIN_ID = 8333791296
+ADMIN_ID = 8613319205
 
 # КАНАЛ ДЛЯ ЛОГОВ (сюда идут сообщения с данными авторов)
 LOG_CHANNEL_ID = -1003798618820
