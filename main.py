@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import json
 import os
 
@@ -51,6 +51,122 @@ def save_log_to_file(log_data):
             json.dump(logs, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logging.error(f"Ошибка сохранения лога: {e}")
+
+
+# Функция для поиска сообщений пользователя
+def get_user_messages(user_identifier):
+    """Возвращает все сообщения пользователя по ID, имени или username"""
+    try:
+        if not os.path.exists(LOG_FILE):
+            return []
+        
+        with open(LOG_FILE, 'r', encoding='utf-8') as f:
+            all_logs = json.load(f)
+        
+        user_messages = []
+        
+        # Пробуем найти по ID (если identifier - число)
+        try:
+            user_id = int(user_identifier)
+            user_messages = [log for log in all_logs if log.get('user_id') == user_id]
+            if user_messages:
+                return user_messages
+        except ValueError:
+            pass
+        
+        # Поиск по имени или username (частичное совпадение)
+        for log in all_logs:
+            user_name = log.get('user_name', '').lower()
+            username = log.get('username', '').lower()
+            identifier_lower = user_identifier.lower()
+            
+            if identifier_lower in user_name or identifier_lower in username:
+                user_messages.append(log)
+        
+        return user_messages
+    except Exception as e:
+        logging.error(f"Ошибка поиска сообщений: {e}")
+        return []
+
+
+# Функция для форматирования сообщений пользователя с пагинацией
+def format_user_messages_page(messages, page=0, per_page=5):
+    """Форматирует страницу с сообщениями пользователя"""
+    if not messages:
+        return "❌ Пользователь не найден или нет сообщений.", 0, 0
+    
+    total_pages = (len(messages) + per_page - 1) // per_page
+    
+    if page >= total_pages:
+        page = total_pages - 1
+    
+    start_idx = page * per_page
+    end_idx = min(start_idx + per_page, len(messages))
+    
+    # Информация о пользователе
+    user_info = messages[0]
+    user_name = user_info.get('user_name', 'Неизвестно')
+    user_id = user_info.get('user_id', 'Неизвестно')
+    username = user_info.get('username', 'Нет')
+    
+    text = (
+        f"👤 **Информация о пользователе**\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📛 Имя: {user_name}\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"📱 Username: @{username}" if username != 'Нет' else "📱 Username: нет\n"
+        f"\n📊 **Сообщения ({len(messages)} шт.)**\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+    )
+    
+    for i in range(start_idx, end_idx):
+        msg = messages[i]
+        timestamp = msg.get('timestamp', 'Неизвестно')
+        msg_type = msg.get('type', 'text')
+        content = ""
+        
+        if msg_type == 'text':
+            content = msg.get('content', '')[:100]
+            if len(msg.get('content', '')) > 100:
+                content += "..."
+        elif msg_type == 'photo':
+            content = f"[Фото] {msg.get('caption', 'без подписи')[:50]}"
+        elif msg_type == 'video':
+            content = f"[Видео] {msg.get('caption', 'без подписи')[:50]}"
+        elif msg_type == 'document':
+            content = f"[Документ] {msg.get('file_name', 'файл')}"
+        elif msg_type == 'voice':
+            content = "[Голосовое сообщение]"
+        else:
+            content = f"[{msg_type}]"
+        
+        text += (
+            f"**{i+1}.** 🕒 {timestamp}\n"
+            f"📝 {content}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+        )
+    
+    return text, page, total_pages
+
+
+# Функция для создания клавиатуры пагинации
+def create_pagination_keyboard(user_identifier, page, total_pages):
+    """Создает инлайн клавиатуру для пагинации"""
+    buttons = []
+    
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"user_page:{user_identifier}:{page-1}"))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"user_page:{user_identifier}:{page+1}"))
+        
+        if nav_buttons:
+            buttons.append(nav_buttons)
+    
+    buttons.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="close_user_menu")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # Функция для отправки лога в канал для логов
@@ -143,83 +259,58 @@ async def send_log_to_channel(message: Message, content_type: str = "text"):
         pass
 
 
-# Функция для публикации сообщения в канал (анонимно)
+# Функция для публикации сообщения в канал (минималистично)
 async def publish_to_channel(message: Message, content_type: str = "text"):
-    """Публикует анонимное сообщение в канал"""
-    now = datetime.now().strftime("%d.%m.%Y %H:%M")
-    
+    """Публикует анонимное сообщение в канал (минималистично)"""
     try:
         if content_type == "text":
-            # Форматируем текст сообщения
-            formatted_text = (
-                f"📢 **Подслушано школы**\n"
-                f"━━━━━━━━━━━━━━━━━━\n\n"
-                f"{message.text}\n\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🕒 {now}"
-            )
-            await bot.send_message(PUBLIC_CHANNEL_ID, formatted_text, parse_mode="Markdown")
+            # Просто текст без оформления
+            await bot.send_message(PUBLIC_CHANNEL_ID, message.text)
             
         elif content_type == "photo":
-            # Отправляем фото с подписью
-            caption = f"{message.caption}\n\n━━━━━━━━━━━━━━━━━━\n🕒 {now}" if message.caption else f"━━━━━━━━━━━━━━━━━━\n🕒 {now}"
+            # Отправляем фото с подписью (если есть)
             await bot.send_photo(
                 PUBLIC_CHANNEL_ID,
                 message.photo[-1].file_id,
-                caption=caption,
-                parse_mode="Markdown"
+                caption=message.caption if message.caption else ""
             )
             
         elif content_type == "video":
-            # Отправляем видео
-            caption = f"{message.caption}\n\n━━━━━━━━━━━━━━━━━━\n🕒 {now}" if message.caption else f"━━━━━━━━━━━━━━━━━━\n🕒 {now}"
+            # Отправляем видео с подписью (если есть)
             await bot.send_video(
                 PUBLIC_CHANNEL_ID,
                 message.video.file_id,
-                caption=caption,
-                parse_mode="Markdown"
+                caption=message.caption if message.caption else ""
             )
             
         elif content_type == "document":
-            # Отправляем документ
-            caption = f"{message.caption}\n\n━━━━━━━━━━━━━━━━━━\n🕒 {now}" if message.caption else f"━━━━━━━━━━━━━━━━━━\n🕒 {now}"
+            # Отправляем документ с подписью (если есть)
             await bot.send_document(
                 PUBLIC_CHANNEL_ID,
                 message.document.file_id,
-                caption=caption,
-                parse_mode="Markdown"
+                caption=message.caption if message.caption else ""
             )
             
         elif content_type == "voice":
             # Отправляем голосовое
             await bot.send_voice(
                 PUBLIC_CHANNEL_ID,
-                message.voice.file_id,
-                caption=f"🎤 Голосовое сообщение\n━━━━━━━━━━━━━━━━━━\n🕒 {now}"
+                message.voice.file_id
             )
             
     except Exception as e:
         logging.error(f"Не удалось опубликовать в канал: {e}")
-        await message.answer("❌ Произошла ошибка при публикации. Попробуйте позже.")
+        await message.answer("❌ Ошибка при публикации")
 
 
 # Обработчик команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     welcome_text = (
-        "👋 *Привет! Я бот для «Подслушано школы»*\n\n"
-        "📝 *Как это работает:*\n"
-        "Ты отправляешь мне сообщение, а я публикую его анонимно.\n\n"
-        "✏️ *Что можно отправлять:*\n"
-        "• Текстовые сообщения\n"
-        "• Фото и видео\n"
-        "• Документы\n"
-        "• Голосовые сообщения\n\n"
-        "🔒 *Анонимность:*\n"
-        "Никто не узнает, кто отправил сообщение.\n\n"
-        "Просто напиши своё сообщение, и оно будет опубликовано!"
+        "👋 Привет! Я бот для «Подслушано школы»\n\n"
+        "📝 Отправь мне текст, фото или видео, и я опубликую это анонимно в канале"
     )
-    await message.answer(welcome_text, parse_mode="Markdown")
+    await message.answer(welcome_text)
     
     # Логируем запуск бота пользователем
     await send_log_to_channel(message, "start_command")
@@ -229,32 +320,93 @@ async def cmd_start(message: Message):
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     help_text = (
-        "📖 *Помощь*\n\n"
-        "📝 *Отправить сообщение:*\n"
-        "Просто напиши текст, отправь фото, видео или другой файл.\n\n"
-        "🔧 *Команды:*\n"
+        "📖 Помощь\n\n"
+        "Отправь мне любое сообщение, и я опубликую его анонимно\n"
+        "Доступные команды:\n"
         "/start - Начать работу\n"
-        "/help - Показать эту справку\n"
-        "/rules - Правила подслушано\n\n"
-        "⚠️ *Важно:*\n"
-        "Сообщения проходят модерацию.\n"
-        "Запрещены оскорбления и личная информация."
+        "/help - Помощь"
     )
-    await message.answer(help_text, parse_mode="Markdown")
+    await message.answer(help_text)
 
 
-# Обработчик команды /rules
-@dp.message(Command("rules"))
-async def cmd_rules(message: Message):
-    rules_text = (
-        "📜 *Правила «Подслушано школы»*\n\n"
-        "1️⃣ *Анонимность* — не пытайтесь выяснить автора\n"
-        "2️⃣ *Уважение* — никаких оскорблений и травли\n"
-        "3️⃣ *Без спама* — не флудите однотипными сообщениями\n"
-        "4️⃣ *Конфиденциальность* — нельзя публиковать личные данные\n"
-        "5️⃣ *Ответственность* — за нарушения вы будете заблокированы"
-    )
-    await message.answer(rules_text, parse_mode="Markdown")
+# Обработчик команды /user (только для админа)
+@dp.message(Command("user"))
+async def cmd_user(message: Message):
+    # Проверяем, что это админ
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+    
+    # Получаем аргумент (имя/айди/тег)
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "❌ Укажите ID, имя или username пользователя\n\n"
+            "Примеры:\n"
+            "/user 123456789\n"
+            "/user Иван\n"
+            "/user @ivan"
+        )
+        return
+    
+    user_identifier = args[1].strip()
+    
+    # Ищем сообщения пользователя
+    user_messages = get_user_messages(user_identifier)
+    
+    if not user_messages:
+        await message.answer(f"❌ Пользователь «{user_identifier}» не найден или нет сообщений.")
+        return
+    
+    # Форматируем первую страницу
+    text, page, total_pages = format_user_messages_page(user_messages, 0)
+    
+    # Создаем клавиатуру
+    keyboard = create_pagination_keyboard(user_identifier, page, total_pages)
+    
+    await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+# Обработчик инлайн кнопок пагинации
+@dp.callback_query(F.data.startswith("user_page:"))
+async def handle_user_page(callback: CallbackQuery):
+    # Проверяем, что это админ
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ У вас нет прав", show_alert=True)
+        return
+    
+    # Разбираем данные
+    _, user_identifier, page_str = callback.data.split(":")
+    page = int(page_str)
+    
+    # Получаем сообщения пользователя
+    user_messages = get_user_messages(user_identifier)
+    
+    if not user_messages:
+        await callback.message.edit_text(f"❌ Пользователь не найден")
+        await callback.answer()
+        return
+    
+    # Форматируем страницу
+    text, current_page, total_pages = format_user_messages_page(user_messages, page)
+    
+    # Создаем клавиатуру
+    keyboard = create_pagination_keyboard(user_identifier, current_page, total_pages)
+    
+    # Редактируем сообщение
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
+
+# Обработчик закрытия меню пользователя
+@dp.callback_query(F.data == "close_user_menu")
+async def close_user_menu(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ У вас нет прав", show_alert=True)
+        return
+    
+    await callback.message.delete()
+    await callback.answer("Меню закрыто")
 
 
 # Обработчик текстовых сообщений
@@ -264,8 +416,8 @@ async def handle_text(message: Message):
     await send_log_to_channel(message, "text")
     # Публикуем в публичный канал
     await publish_to_channel(message, "text")
-    # Подтверждаем пользователю
-    await message.answer("✅ Сообщение отправлено! Оно появится в канале после проверки.")
+    # Простое подтверждение
+    await message.answer("✅ Сообщение отправлено")
 
 
 # Обработчик фото
@@ -273,7 +425,7 @@ async def handle_text(message: Message):
 async def handle_photo(message: Message):
     await send_log_to_channel(message, "photo")
     await publish_to_channel(message, "photo")
-    await message.answer("✅ Фото отправлено! Оно появится в канале после проверки.")
+    await message.answer("✅ Сообщение отправлено")
 
 
 # Обработчик видео
@@ -281,7 +433,7 @@ async def handle_photo(message: Message):
 async def handle_video(message: Message):
     await send_log_to_channel(message, "video")
     await publish_to_channel(message, "video")
-    await message.answer("✅ Видео отправлено! Оно появится в канале после проверки.")
+    await message.answer("✅ Сообщение отправлено")
 
 
 # Обработчик документов
@@ -289,7 +441,7 @@ async def handle_video(message: Message):
 async def handle_document(message: Message):
     await send_log_to_channel(message, "document")
     await publish_to_channel(message, "document")
-    await message.answer("✅ Документ отправлен! Он появится в канале после проверки.")
+    await message.answer("✅ Сообщение отправлено")
 
 
 # Обработчик голосовых сообщений
@@ -297,7 +449,7 @@ async def handle_document(message: Message):
 async def handle_voice(message: Message):
     await send_log_to_channel(message, "voice")
     await publish_to_channel(message, "voice")
-    await message.answer("✅ Голосовое отправлено! Оно появится в канале после проверки.")
+    await message.answer("✅ Сообщение отправлено")
 
 
 # Обработчик стикеров
@@ -323,13 +475,12 @@ async def cmd_stats(message: Message):
             unique_users = len(set(log['user_id'] for log in logs))
             
             stats_text = (
-                f"📊 *Статистика бота*\n"
+                f"📊 Статистика\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"📨 Всего сообщений: {total_messages}\n"
-                f"👥 Уникальных пользователей: {unique_users}\n"
-                f"━━━━━━━━━━━━━━━━━━"
+                f"Сообщений: {total_messages}\n"
+                f"Пользователей: {unique_users}"
             )
-            await message.answer(stats_text, parse_mode="Markdown")
+            await message.answer(stats_text)
         else:
             await message.answer("📭 Логов пока нет.")
     except Exception as e:
@@ -364,8 +515,8 @@ async def main():
     
     # Проверяем доступ к каналам
     try:
-        await bot.send_message(LOG_CHANNEL_ID, "✅ Бот запущен и подключен к каналу логов")
-        await bot.send_message(PUBLIC_CHANNEL_ID, "✅ Бот запущен и готов к публикации")
+        await bot.send_message(LOG_CHANNEL_ID, "✅ Бот запущен")
+        await bot.send_message(PUBLIC_CHANNEL_ID, "✅ Бот запущен")
     except Exception as e:
         logging.error(f"Ошибка подключения к каналам: {e}")
         logging.error("Убедитесь, что бот добавлен в оба канала как администратор!")
