@@ -259,43 +259,51 @@ async def send_log_to_channel(message: Message, content_type: str = "text"):
         pass
 
 
-# Функция для публикации сообщения в канал (минималистично)
+# Функция для публикации сообщения в канал
 async def publish_to_channel(message: Message, content_type: str = "text"):
-    """Публикует анонимное сообщение в канал (минималистично)"""
+    """Публикует анонимное сообщение в канал"""
     try:
         if content_type == "text":
-            # Просто текст без оформления
-            await bot.send_message(PUBLIC_CHANNEL_ID, message.text)
+            # Форматируем текст сообщения
+            formatted_text = (
+                f"📢 Новое сообщение!\n\n"
+                f"{message.text}"
+            )
+            await bot.send_message(PUBLIC_CHANNEL_ID, formatted_text)
             
         elif content_type == "photo":
-            # Отправляем фото с подписью (если есть)
+            # Отправляем фото с подписью
+            caption = f"📢 Новое сообщение!\n\n{message.caption}" if message.caption else "📢 Новое сообщение!"
             await bot.send_photo(
                 PUBLIC_CHANNEL_ID,
                 message.photo[-1].file_id,
-                caption=message.caption if message.caption else ""
+                caption=caption
             )
             
         elif content_type == "video":
-            # Отправляем видео с подписью (если есть)
+            # Отправляем видео с подписью
+            caption = f"📢 Новое сообщение!\n\n{message.caption}" if message.caption else "📢 Новое сообщение!"
             await bot.send_video(
                 PUBLIC_CHANNEL_ID,
                 message.video.file_id,
-                caption=message.caption if message.caption else ""
+                caption=caption
             )
             
         elif content_type == "document":
-            # Отправляем документ с подписью (если есть)
+            # Отправляем документ с подписью
+            caption = f"📢 Новое сообщение!\n\n{message.caption}" if message.caption else "📢 Новое сообщение!"
             await bot.send_document(
                 PUBLIC_CHANNEL_ID,
                 message.document.file_id,
-                caption=message.caption if message.caption else ""
+                caption=caption
             )
             
         elif content_type == "voice":
             # Отправляем голосовое
             await bot.send_voice(
                 PUBLIC_CHANNEL_ID,
-                message.voice.file_id
+                message.voice.file_id,
+                caption="📢 Новое сообщение!"
             )
             
     except Exception as e:
@@ -308,7 +316,17 @@ async def publish_to_channel(message: Message, content_type: str = "text"):
 async def cmd_start(message: Message):
     welcome_text = (
         "👋 Привет! Я бот для «Подслушано школы»\n\n"
-        "📝 Отправь мне текст, фото или видео, и я опубликую это анонимно в канале"
+        "📝 Как это работает:\n"
+        "Ты отправляешь мне сообщение, а я публикую его анонимно.\n\n"
+        "✏️ Что можно отправлять:\n"
+        "• Текстовые сообщения\n"
+        "• Фото и видео\n"
+        "• Документы\n"
+        "• Голосовые сообщения\n\n"
+        "🚫 Что запрещено:\n\n"
+        "• Реклама\n"
+        "• Спам\n\n"
+        "Просто напиши своё сообщение, и оно будет опубликовано и никто не узнает, кто автор!"
     )
     await message.answer(welcome_text)
     
